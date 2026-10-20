@@ -283,7 +283,20 @@ audio{width:100%;height:40px}
           <h2>錄音</h2>
           <div class="grid">
             <div class="field"><label class="label" for="s-keepScreen">錄音時保持螢幕開啟</label><select id="s-keepScreen"><option value="1">是</option><option value="0">否</option></select></div>
+            <div class="field"><label class="label" for="s-recMode">收音模式</label><select id="s-recMode">
+              <option value="meeting">會議模式（建議）</option>
+              <option value="raw">原音模式（不做任何處理）</option>
+              <option value="call">通話模式（降噪＋回音消除，舊版設定）</option></select></div>
+            <div class="field"><label class="label" for="s-recFormat">錄音格式</label><select id="s-recFormat">
+              <option value="auto">自動（手機支援時用 m4a）</option>
+              <option value="webm">WebM</option></select></div>
+            <div class="field"><label class="label" for="s-recKbps">錄音品質</label><select id="s-recKbps">
+              <option value="64">標準 64 kbps（一小時約 29 MB）</option>
+              <option value="96">高 96 kbps（一小時約 43 MB）</option>
+              <option value="32">省空間 32 kbps（一小時約 15 MB）</option></select></div>
           </div>
+          <p class="note">「會議模式」關閉降噪與回音消除，保留自動音量，聲音較自然、遠處的人也收得到；「通話模式」適合對著手機講話，但會讓聲音變悶、忽大忽小。改了之後從下一次錄音開始生效。</p>
+          <p class="note" id="rec-info"></p>
           <p class="note">錄音時通知列會顯示「錄音中」，螢幕關閉或切到其他 App 也會持續收音。Android 13 以上第一次錄音時會詢問是否允許通知；不允許也能錄音，只是通知列看不到。</p>
         </section>
         <section class="panel">
@@ -460,7 +473,7 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0,localMode:"off"},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",recMode:"meeting",recFormat:"auto",recKbps:"64",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0,localMode:"off"},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
 const cloudReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
@@ -654,7 +667,7 @@ async function loadPlayer(){
   if(!blob){$("playbar").hidden=true;return}
   if(cur!==m)return;
   audioURL=URL.createObjectURL(blob);audioFor=m.id;player.src=audioURL;
-  $("play-note").textContent=`錄音 ${fmt(m.duration)}・${(blob.size/1048576).toFixed(1)} MB`;$("au-status").textContent="";
+  $("play-note").textContent=`錄音 ${fmt(m.duration)}・${(blob.size/1048576).toFixed(1)} MB`+(m.recInfo?`・${recInfoText(m.recInfo)}`:"");$("au-status").textContent="";
   $("playbar").hidden=false;
 }
 function seekTo(t){
@@ -677,18 +690,38 @@ player.addEventListener("seeked",highlight);
 // ================= 錄音 =================
 const R={state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null,buf:null,mime:"",audioIdx:0,base:0,resumedAt:0,silentMs:0,floor:0.004,vad:null,tick:null,puts:[]};
 function activeTime(){return R.base+(R.state==="recording"?(performance.now()-R.resumedAt)/1000:0)}
-function pickMime(){const c=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg;codecs=opus"];for(const m of c){try{if(MediaRecorder.isTypeSupported(m))return m}catch(e){}}return""}
+function pickMime(){
+  const mp4=["audio/mp4;codecs=mp4a.40.2","audio/mp4"],webm=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
+  const c=cfg.recFormat==="webm"?webm.concat(mp4):mp4.concat(webm);
+  for(const m of c){try{if(MediaRecorder.isTypeSupported(m))return m}catch(e){}}return""}
+// 收音模式：通話用的降噪／回音消除會讓聲音變悶、遠處的人被壓掉、忽大忽小
+function audioConstraints(){
+  const m=cfg.recMode||"meeting";
+  if(m==="call")return {echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1};
+  if(m==="raw")return {echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:1};
+  return {echoCancellation:false,noiseSuppression:false,autoGainControl:true,channelCount:1};
+}
+const REC_MODE_NAME={meeting:"會議模式",raw:"原音模式",call:"通話模式"};
+function recInfoText(ri){if(!ri)return"";const f=/mp4/.test(ri.mime||"")?"m4a":/ogg/.test(ri.mime||"")?"ogg":"WebM";return`${f}・${ri.kbps||"?"} kbps・${REC_MODE_NAME[ri.mode]||"通話模式"}${ri.sr?`・${Math.round(ri.sr/1000)} kHz`:""}`}
+function renderRecInfo(){
+  let sup=[];try{sup=[["m4a","audio/mp4"],["WebM","audio/webm"]].filter(([n,t])=>MediaRecorder.isTypeSupported(t)).map(x=>x[0])}catch(e){}
+  const last=lsGet("last-rec-info");
+  $("rec-info").textContent=`這支手機可錄的格式：${sup.join("、")||"未知"}。`+(last?`上次錄音：${recInfoText(last)}。`:"");
+}
 
 async function recStart(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){status("這個裝置不支援錄音。");return}
   const m=await ensureMeeting();
   if(m.hasAudio){toast("這場會議已有錄音，請按「＋ 新會議」開始另一場");return}
   status("啟動麥克風…");
-  try{R.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})}
+  try{R.stream=await navigator.mediaDevices.getUserMedia({audio:audioConstraints()})}
   catch(e){status(NATIVE?"無法使用麥克風：請到手機「設定 → 應用程式 → 會議速記 → 權限」開啟麥克風。":"無法使用麥克風："+(e.message||e.name));return}
   R.mime=pickMime();R.mid=m.id;R.audioIdx=0;R.puts=[];
   m.mime=R.mime;m.status="recording";m.hasAudio=true;if(!m.date)m.date=localNow();await saveM(m);
-  try{R.main=new MediaRecorder(R.stream,R.mime?{mimeType:R.mime,audioBitsPerSecond:32000}:{})}catch(e){R.main=new MediaRecorder(R.stream)}
+  const kbps=+cfg.recKbps||64;
+  try{R.main=new MediaRecorder(R.stream,R.mime?{mimeType:R.mime,audioBitsPerSecond:kbps*1000}:{audioBitsPerSecond:kbps*1000})}catch(e){R.main=new MediaRecorder(R.stream)}
+  // 記錄實際的錄音設定，方便之後判斷音質問題
+  try{const st=R.stream.getAudioTracks()[0].getSettings();m.recInfo={mime:R.main.mimeType||R.mime,kbps,mode:cfg.recMode||"meeting",sr:st.sampleRate,ec:st.echoCancellation,ns:st.noiseSuppression,agc:st.autoGainControl};lsSet("last-rec-info",m.recInfo);await saveM(m)}catch(e){}
   R.main.ondataavailable=e=>{if(e.data&&e.data.size)R.puts.push(dbPut("audio",{mid:m.id,i:R.audioIdx++,blob:e.data}))};
   R.main.onstop=()=>finalize(m);
   R.main.start(3000);
@@ -1144,9 +1177,9 @@ $("btn-share").onclick=async()=>{const m=curM();
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
-$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
+$("btn-settings").onclick=()=>{showView("settings");renderRecInfo();renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
-const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"]];
+const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"],["s-recMode","recMode"],["s-recFormat","recFormat"],["s-recKbps","recKbps"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
 function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=!el.dataset.eng.split(" ").includes(cfg.sttEngine));document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
 SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
