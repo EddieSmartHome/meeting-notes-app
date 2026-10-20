@@ -46,7 +46,15 @@ jobs:
           sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />#' $M
           # 備份存到「文件」資料夾：Android 10 需 legacy storage；大檔案需 largeHeap
           sed -i 's#<application#<application android:requestLegacyExternalStorage="true" android:largeHeap="true"#' $M
-          grep -n "permission\|<application" $M
+          # 錄音前景服務：螢幕關閉或切到其他 App 時仍能收音（原生程式在 native/android/）
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />#' $M
+          sed -i 's#</application>#    <service android:name=".RecordingService" android:exported="false" android:foregroundServiceType="microphone" />\n    </application>#' $M
+          J=android/app/src/main/java/$(grep -o '"appId": *"[^"]*"' capacitor.config.json | sed 's/.*"\([^"]*\)"$/\1/' | tr . /)
+          ls "$J/MainActivity.java"
+          cp native/android/java/*.java "$J/"
+          mkdir -p android/app/src/main/res/drawable
+          cp native/android/res/drawable/*.xml android/app/src/main/res/drawable/
+          grep -n "permission\|<application\|<service" $M
 
       # 把版本號與 repo 寫進 App（版本顯示、檢查更新用）
       - name: Stamp version into web app

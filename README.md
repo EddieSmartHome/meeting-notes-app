@@ -20,7 +20,8 @@
 
 ### 錄音
 - 開始／暫停／繼續／結束錄音，畫面顯示錄音時間與即時音量條
-- 錄音時自動保持螢幕開啟，避免手機休眠中斷
+- 錄音時通知列常駐「錄音中」，螢幕關閉或切到其他 App 也會持續收音
+- 錄音時預設保持螢幕開啟（設定 →「錄音」可關閉）
 - 依說話停頓自動切段：滿 10 秒且停頓 0.5 秒就切一段，最長 25 秒強制切段；沒有人說話的片段不送轉錄，節省額度
 - 每場會議同時保存完整原始錄音（約 32 kbps，一小時約 15 MB）
 - App 在錄音中被關閉時，已錄下的部分會保留
@@ -129,7 +130,7 @@ App 的設定頁也有同樣的步驟說明。Google 改版時按鈕名稱可能
 4. **產生會議記錄**：按「產生會議記錄」；或按「複製提示詞」貼到 Claude App 整理
 5. **回顧**：從 ☰ 選任何一場會議，點逐字稿或播放錄音
 
-錄音時請讓 App 保持在畫面上（App 會讓螢幕保持開啟），切到其他 App 或鎖定螢幕可能中斷錄音。
+錄音時可以關閉螢幕或切到其他 App，通知列會顯示「錄音中」。從最近使用的 App 清單把會議速記滑掉會結束錄音。
 
 ## 設定選項
 
@@ -200,7 +201,7 @@ docs/                           README 用的圖示與截圖
 - 錄音：瀏覽器 MediaRecorder，同時錄完整音檔與依停頓切出的片段
 - 儲存：IndexedDB（會議、錄音、待轉錄片段）
 - 轉錄：Gemini `generateContent`（結構化 JSON 輸出，含每段時間）或 Groq Whisper `verbose_json`
-- 外掛：`@capacitor-community/keep-awake`（錄音時螢幕不關）、`@capacitor/share`（分享記錄與備份檔）、`@capacitor/filesystem`（備份檔寫入「文件」資料夾、下載更新檔）、`@capacitor-community/file-opener`（開啟安裝程式）
+- 外掛：`@capacitor-community/keep-awake`（錄音時螢幕不關）；自製原生外掛 `RecordingService`（`native/android/`，錄音前景服務）、`@capacitor/share`（分享記錄與備份檔）、`@capacitor/filesystem`（備份檔寫入「文件」資料夾、下載更新檔）、`@capacitor-community/file-opener`（開啟安裝程式）
 
 ### 編譯與發布
 

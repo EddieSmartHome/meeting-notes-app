@@ -266,6 +266,13 @@ audio{width:100%;height:40px}
       <!-- 設定 -->
       <div class="col" id="view-settings" hidden>
         <section class="panel">
+          <h2>錄音</h2>
+          <div class="grid">
+            <div class="field"><label class="label" for="s-keepScreen">錄音時保持螢幕開啟</label><select id="s-keepScreen"><option value="1">是</option><option value="0">否</option></select></div>
+          </div>
+          <p class="note">錄音時通知列會顯示「錄音中」，螢幕關閉或切到其他 App 也會持續收音。Android 13 以上第一次錄音時會詢問是否允許通知；不允許也能錄音，只是通知列看不到。</p>
+        </section>
+        <section class="panel">
           <h2>語音轉文字</h2>
           <div class="grid">
             <div class="field full"><label class="label" for="s-sttEngine">轉錄服務</label>
@@ -409,7 +416,7 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh"},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1"},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
 const sttReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
@@ -641,7 +648,7 @@ async function recStart(){
   segStart();
   R.vad=setInterval(vadTick,100);
   R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);
-  keepAwake(true);renderRecUI();renderList();
+  keepAwake(true);bgRec(true);renderRecUI();renderList();
   status(sttReady()?"錄音中，講完一段後文字會陸續出現":`錄音中。尚未設定 ${sttName()} 金鑰，錄音會先保存，設定後自動轉錄`);
 }
 function segStart(){
@@ -690,7 +697,7 @@ async function finalize(m){
   try{R.ctx&&R.ctx.close()}catch(e){}
   if(m){m.duration=R.base;m.status="done";await saveM(m)}
   Object.assign(R,{state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null});
-  keepAwake(false);$("meter").style.width="0";
+  keepAwake(false);bgRec(false);$("meter").style.width="0";
   status(`已結束，錄音 ${fmt(m?m.duration:0)}`);
   renderList();if(cur&&m&&cur.id===m.id){renderRecUI();await loadPlayer();updatePending()}
   updateStorage();maybeAuto(m&&m.id);
@@ -714,11 +721,19 @@ function renderRecUI(){
 }
 
 async function keepAwake(on){
+  if(on&&cfg.keepScreen==="0")return;
   const K=PL.KeepAwake;
   if(K){try{on?await K.keepAwake():await K.allowSleep()}catch(e){}return}
   try{if(on&&"wakeLock" in navigator)R.wake=await navigator.wakeLock.request("screen");else if(!on&&R.wake){R.wake.release();R.wake=null}}catch(e){}
 }
 document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&R.state==="recording")keepAwake(true)});
+// 錄音前景服務（原生）：螢幕關閉或切到其他 App 時，Android 才不會把麥克風改成靜音
+let bgRecOn=false;
+async function bgRec(on){
+  const S=PL.RecordingService;if(!S||on===bgRecOn)return;
+  try{if(on)await S.start({text:"錄音中，螢幕關閉也會持續收音"});else await S.stop();bgRecOn=on}
+  catch(e){if(on)toast("無法啟動背景錄音，請讓 App 保持在畫面上")}
+}
 
 // ================= 轉錄佇列 =================
 const pendingCount={};let qBusy=false,qErr="";
@@ -950,13 +965,14 @@ function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-setti
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
 $("btn-settings").onclick=()=>{showView("settings");renderCatSettings();closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
-const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"]];
+const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
 function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=el.dataset.eng!==cfg.sttEngine);document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
 SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
   if((k==="gemKey"||k==="groqKey")&&cfg[k]){toast("金鑰已儲存");retryAll()}
   if(k==="sttEngine"||k==="gemModel")retryAll()})});
 engUI();
+$("s-keepScreen").addEventListener("change",()=>{if(R.state==="recording")keepAwake(cfg.keepScreen!=="0")});
 if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
 async function updateStorage(){try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
 
