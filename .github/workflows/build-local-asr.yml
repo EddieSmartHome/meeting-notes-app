@@ -1,0 +1,82 @@
+name: Build local ASR engine
+
+# 本機辨識用的 sherpa-onnx 辨識引擎（Android AAR）與 Whisper Small 模型。
+# 只需手動執行一次（GitHub 網頁 → Actions → Build local ASR engine → Run workflow），
+# 結果放在本 repo 的 Release「local-asr-v1」，一般的 APK 編譯直接下載使用，不會重編。
+# 需要更新引擎時（例如 sherpa-onnx 發新版），改 sherpa_ref 後再執行一次。
+on:
+  workflow_dispatch:
+    inputs:
+      sherpa_ref:
+        description: "sherpa-onnx 的 commit 或 tag（預設含 2026-09-20 中文掉字修正 #3965）"
+        default: "db749e72258c1eef25d314c0e154eeb66bf09350"
+      release_tag:
+        description: "存放的 Release 名稱"
+        default: "local-asr-v1"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: k2-fsa/sherpa-onnx
+          ref: ${{ inputs.sherpa_ref }}
+          path: sherpa
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Build native libs (arm64-v8a, armeabi-v7a)
+        working-directory: sherpa
+        run: |
+          export ANDROID_NDK=$ANDROID_NDK_LATEST_HOME
+          echo "NDK: $ANDROID_NDK"
+          J=android/SherpaOnnxAar/sherpa_onnx/src/main/jniLibs
+          ./build-android-arm64-v8a.sh
+          mkdir -p $J/arm64-v8a && cp -v build-android-arm64-v8a/install/lib/*.so $J/arm64-v8a/
+          rm -rf build-android-arm64-v8a
+          ./build-android-armv7-eabi.sh
+          mkdir -p $J/armeabi-v7a && cp -v build-android-armv7-eabi/install/lib/*.so $J/armeabi-v7a/
+          rm -rf build-android-armv7-eabi
+          ls -lh $J/*
+
+      - name: Build AAR
+        working-directory: sherpa/android/SherpaOnnxAar
+        run: |
+          ./gradlew :sherpa_onnx:assembleRelease --no-daemon
+          mkdir -p $GITHUB_WORKSPACE/out
+          cp sherpa_onnx/build/outputs/aar/sherpa_onnx-release.aar $GITHUB_WORKSPACE/out/sherpa-onnx.aar
+          ls -lh $GITHUB_WORKSPACE/out
+
+      - name: Get Whisper Small model (int8)
+        run: |
+          cd $GITHUB_WORKSPACE
+          curl -fsSL --retry 3 -o ws.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2
+          tar xjf ws.tar.bz2
+          cp sherpa-onnx-whisper-small/small-encoder.int8.onnx sherpa-onnx-whisper-small/small-decoder.int8.onnx sherpa-onnx-whisper-small/small-tokens.txt out/
+          cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt && ls -lh
+
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+          REF: ${{ inputs.sherpa_ref }}
+        run: |
+          cd $GITHUB_WORKSPACE/out
+          NOTES="本機辨識（離線）用的檔案，供 App 編譯與下載使用，不是 App 版本。
+          - sherpa-onnx.aar：sherpa-onnx 辨識引擎（Apache-2.0），由 k2-fsa/sherpa-onnx@${REF} 編譯，含中文掉字修正
+          - small-*.onnx、small-tokens.txt：OpenAI Whisper Small（MIT）的 int8 ONNX 版本，取自 sherpa-onnx 官方 asr-models
+          - SHA256SUMS.txt：檔案校驗碼"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" * --clobber -R "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes "$NOTES" -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" * --title "本機辨識引擎與模型（$TAG）" --notes "$NOTES" --prerelease --latest=false -R "$GITHUB_REPOSITORY"
+          fi
