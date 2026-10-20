@@ -151,7 +151,7 @@ public class LocalAsrPlugin extends Plugin {
         });
     }
 
-    private OfflineRecognizer load() {
+    private OfflineRecognizer loadRecognizer() {
         if (recognizer != null) return recognizer;
         File d = dir();
         OfflineWhisperModelConfig w = new OfflineWhisperModelConfig();
@@ -183,7 +183,7 @@ public class LocalAsrPlugin extends Plugin {
                 float[] samples = new float[raw.length / 2];
                 for (int i = 0; i < samples.length; i++) samples[i] = bb.getShort() / 32768f;
                 long t0 = System.currentTimeMillis();
-                OfflineRecognizer rec = load();
+                OfflineRecognizer rec = loadRecognizer();
                 OfflineStream s = rec.createStream();
                 s.acceptWaveform(samples, sr);
                 rec.decode(s);
