@@ -19,4 +19,5 @@
 - App 只使用免費服務為預設（目前為 Gemini 免費方案）；付費服務僅作為選項
 - 金鑰欄位不假設金鑰的開頭格式
 - 提交訊息不可加上 `Claude-Session` 對話連結（使用者指定）；提交署名使用 Claude <noreply@anthropic.com>，不使用使用者的 Email
-- 簽章金鑰只存在 GitHub Secret `SIGNING_KEYSTORE_BASE64`，絕不可再加入 repo；不可更換金鑰（會導致已安裝的 App 無法更新）
+- 簽章金鑰與密碼只存在 GitHub Secret `SIGNING_KEYSTORE_BASE64`、`SIGNING_PASSWORD`，絕不可加入 repo、輸出到記錄或文件；不可再更換金鑰（會導致已安裝的 App 無法更新）。2026-10-20 曾因舊金鑰在公開 repo 中外流而換過一次
+- 這個 repo 是公開的：任何提交內容（含歷史）都視為公開資訊

@@ -58,27 +58,28 @@ jobs:
       - name: Sync web assets and plugins
         run: npx cap sync android
 
-      # 簽章金鑰存在 GitHub Secrets（SIGNING_KEYSTORE_BASE64），不放在 repo 裡
-      # 必須一直使用同一把金鑰，新版才能覆蓋安裝舊版
+      # 簽章金鑰與密碼存在 GitHub Secrets（SIGNING_KEYSTORE_BASE64、SIGNING_PASSWORD），不放在 repo 裡
+      # 必須一直使用同一把金鑰，新版才能覆蓋安裝舊版（2026-10-20 已換成新金鑰）
       - name: Use fixed signing key
         env:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
-          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
-            echo "::error::缺少 SIGNING_KEYSTORE_BASE64 這個 Secret（Settings → Secrets and variables → Actions）"
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ] || [ -z "$SIGNING_PASSWORD" ]; then
+            echo "::error::缺少 SIGNING_KEYSTORE_BASE64 或 SIGNING_PASSWORD 這兩個 Secret（Settings → Secrets and variables → Actions）"
             exit 1
           fi
           mkdir -p signing
-          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > signing/debug.keystore
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > signing/release.keystore
           cat >> android/app/build.gradle <<'GRADLE'
 
           android {
               signingConfigs {
                   debug {
-                      storeFile rootProject.file("../signing/debug.keystore")
-                      storePassword "android"
-                      keyAlias "androiddebugkey"
-                      keyPassword "android"
+                      storeFile rootProject.file("../signing/release.keystore")
+                      storePassword System.getenv("SIGNING_PASSWORD")
+                      keyAlias "meetingnotes"
+                      keyPassword System.getenv("SIGNING_PASSWORD")
                   }
               }
               buildTypes {
@@ -88,7 +89,6 @@ jobs:
               }
           }
           GRADLE
-          tail -18 android/app/build.gradle
 
       # 版號由 VERSION 檔決定；versionCode 用執行次數，確保每次都能覆蓋安裝
       - name: Set version
@@ -100,6 +100,8 @@ jobs:
 
       - name: Build APK
         working-directory: android
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
@@ -109,7 +111,7 @@ jobs:
         run: |
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           # 固定金鑰的憑證指紋（公開資訊，不是金鑰本身）
-          EXPECTED="39:22:B3:F0:AD:6E:AA:62:1C:9E:4C:23:F4:B9:63:0E:59:E8:95:17:DF:2F:0B:E1:D4:4B:EB:90:62:F4:3E:71"
+          EXPECTED="22:03:74:5A:13:BC:CD:03:07:D9:36:1B:27:D3:FD:66:26:B3:61:62:B4:45:93:9B:80:41:4F:07:5D:2B:0F:E3"
           ACTUAL=$(keytool -printcert -jarfile "$APK" | grep -m1 "SHA256:" | awk '{print $2}')
           echo "expected: $EXPECTED"
           echo "actual:   $ACTUAL"

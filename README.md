@@ -107,6 +107,8 @@
 
 之後 App 每次開啟都會自動檢查，有新版就自動下載並跳出安裝畫面，按「更新」即可，會議資料與設定都會保留。
 
+> 2026-10-20 更換過簽章金鑰。在這之前安裝的版本無法直接覆蓋：請先用「備份與還原」備份，移除舊 App，安裝最新版後再還原。
+
 ## 第一次設定：申請免費的 Gemini 金鑰
 
 轉錄與會議記錄預設都使用 Google Gemini 的免費方案，共用同一把金鑰，不需綁信用卡。
@@ -203,7 +205,7 @@ docs/                           README 用的圖示與截圖
 
 ### 編譯與發布
 
-推送到 `main` 就會觸發 GitHub Actions（簽章金鑰從 Secret `SIGNING_KEYSTORE_BASE64` 讀取，並檢查 APK 簽章指紋）：建立 Android 專案 → 加入麥克風權限 → 產生圖示 → 編譯 APK → 發布到 Releases（版號 `v1.0.<執行次數>`）。也可以在 Actions 頁面手動執行 **Build APK**。
+推送到 `main` 就會觸發 GitHub Actions（簽章金鑰與密碼從 Secret `SIGNING_KEYSTORE_BASE64`、`SIGNING_PASSWORD` 讀取，並檢查 APK 簽章指紋）：建立 Android 專案 → 加入麥克風權限 → 產生圖示 → 編譯 APK → 發布到 Releases（版號 `v1.0.<執行次數>`）。也可以在 Actions 頁面手動執行 **Build APK**。
 
 本機開發：
 
@@ -227,12 +229,12 @@ python3 tools/make_icon.py
 
 ### Fork 後自行編譯
 
-簽章金鑰不在 repo 裡。Fork 後請自行產生一把金鑰，以 base64 存到 repo 的 Secret `SIGNING_KEYSTORE_BASE64`，並把 `.github/workflows/build-apk.yml` 裡的 `EXPECTED` 憑證指紋改成你的金鑰指紋：
+簽章金鑰不在 repo 裡。Fork 後請自行產生一把金鑰（別名 `meetingnotes`），以 base64 存到 Secret `SIGNING_KEYSTORE_BASE64`、密碼存到 Secret `SIGNING_PASSWORD`，並把 `.github/workflows/build-apk.yml` 裡的 `EXPECTED` 憑證指紋改成你的金鑰指紋：
 
 ```bash
-keytool -genkeypair -keystore my.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+keytool -genkeypair -keystore my.keystore -storetype PKCS12 -alias meetingnotes -keyalg RSA -keysize 4096 -validity 20000 -dname "CN=My App"
 base64 -w0 my.keystore    # 貼到 Secret
-keytool -list -v -keystore my.keystore -storepass android | grep SHA256
+keytool -list -v -keystore my.keystore | grep SHA256
 ```
 
-金鑰請自行妥善保存，遺失後新版將無法覆蓋安裝舊版。這是除錯用簽章，不適合上架 Google Play。
+金鑰請自行妥善保存，遺失後新版將無法覆蓋安裝舊版。APK 以 debug 組態編譯，不適合直接上架 Google Play。
