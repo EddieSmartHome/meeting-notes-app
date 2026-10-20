@@ -235,6 +235,14 @@ audio{width:100%;height:40px}
             <h2 id="h-tr">逐字稿</h2>
             <span class="note" id="seg-count"></span>
           </div>
+          <div class="headrow" style="margin-top:8px">
+            <label class="note" for="tr-engine" style="white-space:nowrap">辨識方式</label>
+            <select id="tr-engine" style="flex:1;min-width:0;width:auto"></select>
+          </div>
+          <div class="headrow" style="margin-top:4px;justify-content:flex-end">
+            <button class="btn-ghost" id="btn-undo-retr" hidden>復原上一版</button>
+            <button class="btn-ghost" id="btn-retr" hidden>用這個方式重新轉錄</button>
+          </div>
           <div class="pending" id="pending" hidden></div>
           <div class="transcript" id="transcript"></div>
           <p class="note" id="tr-hint">點任一段文字即從該處播放錄音；✎ 修改辨識錯字，☆ 標記重點。</p>
@@ -750,6 +758,7 @@ function renderRecUI(){
   else{b.textContent="● 開始錄音";b.className="btn-rec"}
   b.disabled=R.state==="stopping"||(R.state!=="idle"&&!mine);
   $("btn-stop").disabled=!(mine&&(R.state==="recording"||R.state==="paused"));
+  renderTrTools();
   if(!mine&&R.state==="idle"){$("timer").textContent="00:00";if(!finished)status(sttReady()?"按「開始錄音」，中英文會自動辨識":`尚未設定 ${sttName()} 金鑰：可先錄音，設定後自動轉錄（左側選單 → 設定）`)}
 }
 
@@ -970,7 +979,7 @@ async function transcribeGroq(c){
   const m=meetings.find(x=>x.id===c.mid);
   const tail=m&&m.segs.length?m.segs.slice(-3).map(s=>s.text).join(" ").slice(-120):"";
   const prompt=["以下是台灣公司的會議錄音，使用繁體中文，夾雜英文術語。",cfg.vocab?("專有名詞："+cfg.vocab+"。"):"",tail].filter(Boolean).join(" ");
-  const ext=/mp4/.test(c.blob.type)?"m4a":/ogg/.test(c.blob.type)?"ogg":"webm";
+  const ext=/wav/.test(c.blob.type)?"wav":/mp4/.test(c.blob.type)?"m4a":/ogg/.test(c.blob.type)?"ogg":"webm";
   const fd=new FormData();
   fd.append("file",new File([c.blob],"chunk."+ext,{type:c.blob.type||"audio/webm"}));
   fd.append("model",cfg.stt);fd.append("response_format","verbose_json");fd.append("temperature","0");fd.append("prompt",prompt);
@@ -1178,6 +1187,76 @@ renderGemModels();
 // 開啟 App 時，清單超過 1 天就重新同步
 if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>86400000)setTimeout(()=>syncGemModels(false),3000);
 function renderGtxDebug(){const d=lsGet("gtx-last-empty");$("gtx-debug").hidden=!d||cfg.sttEngine!=="gtx";if(d){const t=new Date(d.at);$("gtx-debug-text").textContent=`${t.getMonth()+1}/${t.getDate()} ${p2(t.getHours())}:${p2(t.getMinutes())}・片段 ${(+d.dur||0).toFixed(1)} 秒・${d.mime}\n${d.raw}`}}
+// ================= 會議畫面：辨識方式與重新轉錄 =================
+const trEngineNow=()=>cfg.localMode==="always"&&LA&&localSt.ready?"local":cfg.sttEngine;
+function renderTrTools(){
+  const sel=$("tr-engine"),v=trEngineNow();sel.textContent="";
+  const opts=[["gemini","Gemini（雲端）"],["gtx","Gemini Transcribe（雲端）"]];
+  if(cfg.sttEngine==="groq"||cfg.groqKey)opts.push(["groq","Groq Whisper（雲端）"]);
+  if(LA)opts.push(["local",localSt.ready?"本機（離線，Whisper Small）":"本機（需先到設定下載模型）"]);
+  opts.forEach(([k,t])=>{const o=new Option(t,k);if(k==="local"&&!localSt.ready)o.disabled=true;sel.add(o)});
+  sel.value=v;
+  const m=cur,busy=R.state!=="idle"&&m&&R.mid===m.id;
+  $("btn-retr").hidden=!(m&&m.hasAudio&&!busy&&m.status!=="recording");
+  $("btn-undo-retr").hidden=!(m&&m.segsPrev);
+}
+$("tr-engine").addEventListener("change",e=>{
+  const v=e.target.value;
+  if(v==="local"){cfg.localMode="always"}
+  else{
+    if((v==="groq"&&!cfg.groqKey)||(v!=="groq"&&!cfg.gemKey)){toast(`請先到設定填入 ${v==="groq"?"Groq":"Gemini"} 金鑰`);renderTrTools();return}
+    cfg.sttEngine=v;if(cfg.localMode==="always")cfg.localMode="fallback";
+  }
+  saveCfg();$("s-sttEngine").value=cfg.sttEngine;if($("s-localMode"))$("s-localMode").value=cfg.localMode;engUI();renderTrTools();retryAll();
+  toast(`之後的轉錄改用：${e.target.options[e.target.selectedIndex].text}`);
+});
+// 把整場原始錄音解碼成 16 kHz、依停頓切段（規則同錄音時：滿 10 秒且停頓 0.5 秒，最長 25 秒；沒人聲的段落略過）
+async function splitRecording(m){
+  const blob=await getAudioBlob(m);if(!blob)throw new Error("這場會議沒有錄音");
+  let ctx;try{ctx=new AudioContext({sampleRate:16000})}catch(e){ctx=new (window.AudioContext||window.webkitAudioContext)()}
+  let buf;try{buf=await ctx.decodeAudioData(await blob.arrayBuffer())}finally{try{ctx.close()}catch(e){}}
+  let x=buf.getChannelData(0),sr=buf.sampleRate;
+  if(sr!==16000){const off=new OfflineAudioContext(1,Math.ceil(buf.duration*16000),16000);const src=off.createBufferSource();src.buffer=buf;src.connect(off.destination);src.start();x=(await off.startRendering()).getChannelData(0);sr=16000}
+  const hop=sr/10,out=[];let floor=0.004,start=0,silent=0,voice=false;
+  const push=(endIdx)=>{if(voice&&(endIdx-start)/sr>0.8)out.push({start:start/sr,dur:(endIdx-start)/sr,pcm:x.subarray(start,endIdx)});start=endIdx;silent=0;voice=false};
+  for(let i=0;i+hop<=x.length;i+=hop){
+    let sum=0;for(let j=i;j<i+hop;j++)sum+=x[j]*x[j];const rms=Math.sqrt(sum/hop);
+    floor=rms<floor?rms:floor*0.998+rms*0.002;
+    if(rms>Math.max(0.008,floor*3)){voice=true;silent=0}else silent+=100;
+    const len=(i+hop-start)/sr;
+    if((len>=10&&silent>=500)||len>=25)push(i+hop);
+    else if(!voice&&len>=20){start=i+hop;silent=0}
+  }
+  push(x.length);
+  return out;
+}
+let retrArm=null;
+$("btn-retr").onclick=async()=>{
+  const m=cur;if(!m||!m.hasAudio)return;
+  if(R.state!=="idle"&&R.mid===m.id){toast("錄音中無法重新轉錄");return}
+  if(!sttReady()){toast("請先設定辨識方式（金鑰或本機模型）");return}
+  const b=$("btn-retr");
+  if(!retrArm){b.textContent="再按一次：取代目前逐字稿";b.classList.add("btn-rec");retrArm=setTimeout(()=>{retrArm=null;b.textContent="用這個方式重新轉錄";b.classList.remove("btn-rec")},4000);return}
+  clearTimeout(retrArm);retrArm=null;b.textContent="用這個方式重新轉錄";b.classList.remove("btn-rec");
+  b.disabled=true;status("正在切分錄音…");
+  try{
+    const parts=await splitRecording(m);
+    await dbDel("chunks",midRange(m.id));
+    if(m.segs&&m.segs.length)m.segsPrev=m.segs;  // 保留上一版，可復原
+    m.segs=[];m.autoTried=false;await saveM(m);
+    for(const p of parts){const i16=new Int16Array(p.pcm.length);for(let k=0;k<p.pcm.length;k++){const v=Math.max(-1,Math.min(1,p.pcm[k]));i16[k]=v<0?v*0x8000:v*0x7fff}
+      await dbPut("chunks",{mid:m.id,start:p.start,dur:p.dur,blob:pcmWav(i16,16000),tries:0})}
+    renderTranscript();renderTrTools();await updatePending();retryAll();
+    status(`重新轉錄中：共 ${parts.length} 段，使用 ${$("tr-engine").options[$("tr-engine").selectedIndex].text}`);
+  }catch(e){status("重新轉錄失敗："+(e.message||e))}
+  finally{b.disabled=false}
+};
+$("btn-undo-retr").onclick=async()=>{
+  const m=cur;if(!m||!m.segsPrev)return;
+  await dbDel("chunks",midRange(m.id));  // 停止尚未完成的重新轉錄
+  const t=m.segs;m.segs=m.segsPrev;m.segsPrev=t&&t.length?t:undefined;await saveM(m);
+  renderTranscript();renderTrTools();updatePending();toast(m.segsPrev?"已復原上一版（再按一次可切回）":"已復原上一版");
+};
 // ================= 本機辨識設定 =================
 function renderLocal(){
   if(!LA)return;
@@ -1186,7 +1265,7 @@ function renderLocal(){
   $("local-bar").hidden=!localSt.downloading;
   $("local-status").textContent=localSt.downloading?"模型下載中…":localSt.ready?`模型已下載（${Math.round((localSt.bytes||0)/1048576)} MB）`:"尚未下載模型。選擇使用方式前，請先下載模型。";
 }
-async function refreshLocal(){if(!LA)return;try{Object.assign(localSt,await LA.status())}catch(e){}renderLocal()}
+async function refreshLocal(){if(!LA)return;try{Object.assign(localSt,await LA.status())}catch(e){}renderLocal();renderTrTools()}
 if(LA){
   try{LA.addListener("progress",p=>{const all=389*1048576;const got=(p.doneBefore||0)+(p.received||0);
     $("local-fill").style.width=Math.min(100,got/all*100)+"%";$("local-status").textContent=`模型下載中…（第 ${p.index+1}/${p.count} 個檔案，共約 ${Math.round(got/1048576)} MB）`})}catch(e){}
@@ -1504,7 +1583,7 @@ $("btn-backup-done").onclick=()=>{showView("meeting");renderAll()};
 renderVersion();
 
 // ================= 啟動 =================
-function renderAll(){renderTitle();renderInfo();renderRecUI();renderTranscript();renderMinutes();renderList();loadPlayer();updatePending()}
+function renderAll(){renderTitle();renderInfo();renderRecUI();renderTranscript();renderTrTools();renderMinutes();renderList();loadPlayer();updatePending()}
 async function migrateV1(){
   const s=lsGet("mtg-notes-v1");if(!s||s.sample||!s.segs||!s.segs.length||lsGet("mtg-v1-migrated"))return;
   const m={id:uid(),title:s.title||"",date:s.date||localNow(),place:s.place||"",people:s.people||"",segs:s.segs.map(x=>({s:x.t||0,e:x.t||0,text:x.text,key:!!x.key})),minutes:s.minutes||"",duration:s.elapsed||0,mime:"",hasAudio:false,status:"done",createdAt:Date.now(),updatedAt:Date.now()};
