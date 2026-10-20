@@ -176,7 +176,7 @@ App 的設定頁也有同樣的步驟說明。Google 改版時按鈕名稱可能
 
 ## 版本更新
 
-目前版本：**v2.0.1**（2026-10-20）
+目前版本：**v2.0.2**（2026-10-20）
 
 完整版本紀錄請見 [docs/CHANGELOG.md](docs/CHANGELOG.md)；開發決策、架構與待辦請見 [docs/DEVELOPMENT_NOTES.md](docs/DEVELOPMENT_NOTES.md)。
 

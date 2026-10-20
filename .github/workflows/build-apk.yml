@@ -154,5 +154,8 @@ jobs:
             2. 依提示允許「安裝未知應用程式」，直接覆蓋安裝即可，會議資料會保留
             3. 第一次使用請到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰
 
+            已安裝 v2.0.1 以後的版本，開啟 App 就會自動更新，不需要手動下載。
+            2026-10-20 換簽章金鑰之前安裝的舊版無法直接覆蓋：請先在 App 用「備份與還原」備份，移除舊 App，安裝後再還原。
+
             完整說明請見 [README](https://github.com/${{ github.repository }}#readme)。
           files: meeting-notes-v${{ env.APP_VERSION }}.apk
