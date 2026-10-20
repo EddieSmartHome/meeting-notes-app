@@ -138,6 +138,7 @@ audio{width:100%;height:40px}
 
 /* ---- 逐字稿 ---- */
 .transcript{display:flex;flex-direction:column}
+.line .src{display:inline-block;margin-right:2px;align-self:center;padding:0 5px;border:1px solid var(--line);border-radius:4px;font-size:.7rem;color:var(--muted,#888);vertical-align:1px;white-space:nowrap}
 .line{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
 .line:last-child{border-bottom:0}
 .line.key .txt{background:var(--accent-soft)}
@@ -222,11 +223,16 @@ audio{width:100%;height:40px}
         </section>
 
         <section class="panel dock" id="playbar" aria-label="錄音播放" hidden>
-          <audio id="player" controls preload="metadata"></audio>
+          <audio id="player" controls preload="metadata" controlsList="nodownload"></audio>
           <div class="headrow">
             <label class="toggle"><input type="checkbox" id="follow" checked> 播放時自動捲動到目前段落</label>
             <span class="spacer"></span>
             <span class="note" id="play-note"></span>
+          </div>
+          <div class="headrow" style="justify-content:flex-end;margin-top:4px">
+            <span class="note" id="au-status" style="flex:1;min-width:0"></span>
+            <button class="btn-ghost" id="au-save">存到手機</button>
+            <button class="btn-ghost" id="au-share">分享錄音</button>
           </div>
         </section>
 
@@ -608,6 +614,7 @@ function renderTranscript(){
   $("seg-count").textContent=segs.length?`${segs.length} 段`:"";
   $("tr-hint").hidden=!segs.length;
 }
+const SRC_NAME={gemini:"Gemini",gtx:"Transcribe",local:"本機",groq:"Groq"};
 function segRow(s,i){
   const row=document.createElement("div");row.className="line"+(s.key?" key":"");row.dataset.i=i;
   const ts=document.createElement("button");ts.className="ts";ts.textContent=fmt(s.s);ts.setAttribute("aria-label","從 "+fmt(s.s)+" 播放");
@@ -617,6 +624,7 @@ function segRow(s,i){
   const st=document.createElement("button");st.className="btn-ghost";st.textContent=s.key?"★":"☆";st.title="標記重點";st.setAttribute("aria-label","標記重點");
   const dl=document.createElement("button");dl.className="btn-ghost";dl.textContent="✕";dl.title="刪除此段";dl.setAttribute("aria-label","刪除此段");
   acts.append(ed,st,dl);row.append(ts,tx,acts);
+  if(s.src){const sb=document.createElement("span");sb.className="src";sb.textContent=SRC_NAME[s.src]||s.src;sb.title="辨識來源";acts.prepend(sb)}
   row.addEventListener("click",e=>{if(e.target.closest(".acts")||tx.isContentEditable)return;seekTo(s.s)});
   ed.onclick=()=>{tx.contentEditable="true";tx.focus();const r=document.createRange();r.selectNodeContents(tx);r.collapse(false);const sel=getSelection();sel.removeAllRanges();sel.addRange(r)};
   tx.addEventListener("blur",async()=>{if(!tx.isContentEditable)return;tx.contentEditable="false";const v=tx.textContent.trim();const m=curM();
@@ -646,7 +654,7 @@ async function loadPlayer(){
   if(!blob){$("playbar").hidden=true;return}
   if(cur!==m)return;
   audioURL=URL.createObjectURL(blob);audioFor=m.id;player.src=audioURL;
-  $("play-note").textContent=`錄音 ${fmt(m.duration)}・${(blob.size/1048576).toFixed(1)} MB`;
+  $("play-note").textContent=`錄音 ${fmt(m.duration)}・${(blob.size/1048576).toFixed(1)} MB`;$("au-status").textContent="";
   $("playbar").hidden=false;
 }
 function seekTo(t){
@@ -813,6 +821,7 @@ async function pump(){
       const all=(await dbGetAll("chunks")).filter(c=>c.tries<3).sort((a,b)=>a.mid===b.mid?a.start-b.start:(a.mid<b.mid?-1:1));
       const c=all.find(x=>x.mid===R.mid)||all[0];if(!c)break;
       try{
+        if(c.engine&&c.engine!=="local"){const w=lastCloudAt+RETR_GAP-Date.now();if(w>0)await qSleep(w);lastCloudAt=Date.now()}
         qStart=Date.now();await updatePending();
         let wd;const segs=await Promise.race([transcribe(c),new Promise((_,rej)=>{wd=setTimeout(()=>rej(netErr("timeout",180000)),180000)})]).finally(()=>{clearTimeout(wd);qStart=0});
         await addSegs(c.mid,segs);
@@ -820,9 +829,9 @@ async function pump(){
       }catch(e){
         qErr=(e.message||String(e))+(e.net?"，會自動重試":"");
         if(e.fatal){status(qErr);break}
-        if((e.net||e.transient)&&cfg.localMode==="fallback"&&localOn()&&cloudReady()){
+        if(!c.engine&&(e.net||e.transient)&&cfg.localMode==="fallback"&&localOn()&&cloudReady()){
           // 雲端連不上或忙碌：這段改用本機辨識，不必等
-          try{const ls=await transcribeLocal(c);await addSegs(c.mid,ls);await dbDel("chunks",[c.mid,c.start]);qErr="";await updatePending();continue}catch(le){}
+          try{const ls=(await transcribeLocal(c)).map(x=>Object.assign(x,{src:"local"}));await addSegs(c.mid,ls);await dbDel("chunks",[c.mid,c.start]);qErr="";await updatePending();continue}catch(le){}
         }
         if(e.net||e.transient){
           // 網路不穩、額度暫時用完、服務忙碌：不算失敗次數，間隔逐步拉長（最長 1 分鐘）持續重試
@@ -864,9 +873,18 @@ async function gemini(parts,schema,ms,opt){
 }
 const noFallback={};
 const SEG_SCHEMA={type:"OBJECT",properties:{segments:{type:"ARRAY",items:{type:"OBJECT",properties:{start:{type:"NUMBER"},end:{type:"NUMBER"},text:{type:"STRING"}},required:["start","end","text"]}}},required:["segments"]};
+function chunkEngine(c){
+  if(c.engine)return c.engine;  // 重新轉錄：固定用當時選的方式
+  if(localOn()&&(cfg.localMode==="always"||!cloudReady()))return "local";
+  return cfg.sttEngine;
+}
 async function transcribe(c){
-  if(localOn()&&(cfg.localMode==="always"||!cloudReady()))return transcribeLocal(c);
-  return cfg.sttEngine==="groq"?transcribeGroq(c):cfg.sttEngine==="gtx"?transcribeGtx(c):transcribeGemini(c)}
+  const eng=chunkEngine(c);
+  const segs=eng==="local"?await transcribeLocal(c):eng==="groq"?await transcribeGroq(c):eng==="gtx"?await transcribeGtx(c):await transcribeGemini(c);
+  return segs.map(x=>Object.assign({src:x.src||eng},x));
+}
+// 重新轉錄送雲端時放慢速度，避開免費方案每分鐘次數上限
+let lastCloudAt=0;const RETR_GAP=6500;
 // 沒有逐句時間點時：依句尾標點分句，時間依字數平均分配到這段錄音
 function timedSplit(c,text){
   const sents=(text.match(/[^。！？!?；;]+[。！？!?；;]*/g)||[text]).map(x=>x.trim()).filter(Boolean);
@@ -915,7 +933,7 @@ function gtxText(d){
   walk(d);return out.join("\n");
 }
 // Gemini Transcribe 回傳空白的紀錄（設定頁可看最近一次，方便判斷原因）
-const gtxStat={empty:0,rescued:0};
+const gtxStat={empty:0,rescued:0},gtxEmptyTry={};
 async function transcribeGtx(c){
   // 改送 16 kHz WAV：比較工具實測 WAV 正常；錄音片段的 WebM 沒有長度資訊，可能讓模型解不出來
   let audio=c.blob;
@@ -934,7 +952,7 @@ async function transcribeGtx(c){
   if(!r.ok){
     // 轉錄專用模型忙碌：該段改用備用模型
     const fbm=cfg.gemFallback||"";
-    if(r.status>=500&&fbm&&!noFallback[fbm]){try{return await transcribeGemini(c,fbm)}catch(e){if(e.fatal)noFallback[fbm]=true}}
+    if(!c.engine&&r.status>=500&&fbm&&!noFallback[fbm]){try{return (await transcribeGemini(c,fbm)).map(x=>Object.assign(x,{src:"gemini"}))}catch(e){if(e.fatal)noFallback[fbm]=true}}
     if(r.status===404){const er=new Error("找不到 Gemini Transcribe 模型，請到設定改用「Google Gemini」轉錄");er.fatal=true;throw er}
     throw gemErr(r,data,"轉錄");
   }
@@ -943,7 +961,13 @@ async function transcribeGtx(c){
     // 片段在錄音時已判斷有人聲，空白多半是模型沒解出來：改用 Gemini 主模型重轉這段
     gtxStat.empty++;
     try{lsSet("gtx-last-empty",{at:Date.now(),dur:c.dur,mime,raw:JSON.stringify(data).slice(0,600)})}catch(e){}
-    const segs=await transcribeGemini(c,cfg.gemModel||undefined);
+    if(c.engine){
+      // 重新轉錄只用 Gemini Transcribe：空白先重試一次，仍空白才當作沒有內容
+      const k=c.mid+"|"+c.start;gtxEmptyTry[k]=(gtxEmptyTry[k]||0)+1;
+      if(gtxEmptyTry[k]<2){const er=new Error("Gemini Transcribe 沒有回傳文字，稍後重試");er.transient=true;er.wait=5000;throw er}
+      return [];
+    }
+    const segs=(await transcribeGemini(c,cfg.gemModel||undefined)).map(x=>Object.assign(x,{src:"gemini"}));
     if(segs.length){gtxStat.rescued++;toast(`Gemini Transcribe 有 ${gtxStat.empty} 段沒有回傳文字，已改用 Gemini 重新轉錄`)}
     return segs;
   }
@@ -1002,7 +1026,7 @@ async function addSegs(mid,segs){
   if(!segs.length)return;
   const m=meetings.find(x=>x.id===mid);if(!m)return;
   // 合併過短的片段，讓每段至少是一句完整的話
-  const merged=[];segs.forEach(s=>{const last=merged[merged.length-1];if(last&&s.s-last.e<0.6&&(last.text.length<14||s.text.length<6)&&last.text.length+s.text.length<90){last.text+=(/[A-Za-z0-9]$/.test(last.text)&&/^[A-Za-z0-9]/.test(s.text)?" ":"")+s.text;last.e=s.e}else merged.push({s:s.s,e:s.e,text:s.text,key:false})});
+  const merged=[];segs.forEach(s=>{const last=merged[merged.length-1];if(last&&last.src===s.src&&s.s-last.e<0.6&&(last.text.length<14||s.text.length<6)&&last.text.length+s.text.length<90){last.text+=(/[A-Za-z0-9]$/.test(last.text)&&/^[A-Za-z0-9]/.test(s.text)?" ":"")+s.text;last.e=s.e}else merged.push({s:s.s,e:s.e,text:s.text,key:false,src:s.src})});
   m.segs.push(...merged);m.segs.sort((a,b)=>a.s-b.s);await saveM(m);
   if(cur&&cur.id===mid){
     const box=$("transcript");const atEnd=merged.every((x,k)=>m.segs[m.segs.length-merged.length+k]===x);
@@ -1245,7 +1269,7 @@ $("btn-retr").onclick=async()=>{
     if(m.segs&&m.segs.length)m.segsPrev=m.segs;  // 保留上一版，可復原
     m.segs=[];m.autoTried=false;await saveM(m);
     for(const p of parts){const i16=new Int16Array(p.pcm.length);for(let k=0;k<p.pcm.length;k++){const v=Math.max(-1,Math.min(1,p.pcm[k]));i16[k]=v<0?v*0x8000:v*0x7fff}
-      await dbPut("chunks",{mid:m.id,start:p.start,dur:p.dur,blob:pcmWav(i16,16000),tries:0})}
+      await dbPut("chunks",{mid:m.id,start:p.start,dur:p.dur,blob:pcmWav(i16,16000),tries:0,engine:trEngineNow()})}
     renderTranscript();renderTrTools();await updatePending();retryAll();
     status(`重新轉錄中：共 ${parts.length} 段，使用 ${$("tr-engine").options[$("tr-engine").selectedIndex].text}`);
   }catch(e){status("重新轉錄失敗："+(e.message||e))}
@@ -1430,7 +1454,7 @@ $("s-update-check").onclick=()=>checkUpdate(true);
 
 // ================= 備份與還原 =================
 const FS=PL.Filesystem;
-const fileExt=t=>/mp4|m4a/.test(t||"")?"m4a":/ogg/.test(t||"")?"ogg":"webm";
+function fileExt(t){return /mp4|m4a/.test(t||"")?"m4a":/ogg/.test(t||"")?"ogg":"webm"}
 const safeName=x=>String(x).replace(/[\\/:*?"<>|\n\r\t]+/g,"_").replace(/\s+/g," ").trim().slice(0,60)||"未命名";
 function stamp(){const d=new Date();return`${d.getFullYear()}${p2(d.getMonth()+1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`}
 function transcriptText(m){
@@ -1492,6 +1516,38 @@ function browserDownload(bytes,name){
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([bytes],{type:"application/zip"}));a.download=name;
   document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);
 }
+// 錄音存檔／分享（播放器內建的「下載」在 App 裡不會動作，所以另外提供）
+let auBusy=false;
+async function exportAudio(target){
+  const m=cur;if(!m||!m.hasAudio||auBusy)return;
+  auBusy=true;["au-save","au-share"].forEach(id=>$(id).disabled=true);
+  const st=t=>{$("au-status").textContent=t};
+  try{
+    const blob=await getAudioBlob(m);if(!blob)throw new Error("找不到這場會議的錄音");
+    const bytes=new Uint8Array(await blob.arrayBuffer());
+    const name=`${safeName(m.title||"未命名會議")}_${(m.date||"").replace(/[-:T]/g,"").slice(0,12)||stamp()}.${fileExt(blob.type)}`;
+    const mb=(bytes.length/1048576).toFixed(1);
+    if(!NATIVE||!FS){
+      const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);
+      st(`已下載 ${name}（${mb} MB）`);return;
+    }
+    if(target==="save"){
+      try{const p=await FS.checkPermissions();if(p.publicStorage!=="granted")await FS.requestPermissions()}catch(e){}
+      await writeBinary(`會議速記/錄音/${name}`,"DOCUMENTS",bytes,st);
+      st(`已存到「文件／會議速記／錄音」：${name}（${mb} MB）`);
+    }else{
+      try{await FS.rmdir({path:"audio-share",directory:"CACHE",recursive:true})}catch(e){}
+      await writeBinary(`audio-share/${name}`,"CACHE",bytes,st);
+      const {uri}=await FS.getUri({path:`audio-share/${name}`,directory:"CACHE"});
+      st("開啟分享選單…");
+      try{await PL.Share.share({title:name,files:[uri],dialogTitle:"分享或儲存錄音"})}catch(e){if(!/cancel/i.test(e.message||""))throw e}
+      st(`錄音檔 ${name}（${mb} MB）`);
+    }
+  }catch(e){st((target==="save"?"存檔失敗：":"分享失敗：")+(e.message||e)+(target==="save"?"。可改用「分享錄音」再選「檔案」儲存。":""))}
+  finally{auBusy=false;["au-save","au-share"].forEach(id=>$(id).disabled=false)}
+}
+$("au-save").onclick=()=>exportAudio("save");
+$("au-share").onclick=()=>exportAudio("share");
 let bkBusy=false;
 async function runBackup(target){
   if(bkBusy)return;
