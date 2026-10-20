@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# 同時只跑一個編譯，避免兩次推送同時發布同一版
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-24.04
