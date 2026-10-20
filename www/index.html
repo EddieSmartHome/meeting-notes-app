@@ -308,6 +308,13 @@ audio{width:100%;height:40px}
           <p class="note">自訂會議的分類（例如：週會、客戶會議、專案檢討）。每個分類可以設定自己的會議記錄格式；沒有設定就用預設格式。</p>
           <div class="catlist" id="cat-list"></div>
           <div class="headrow"><button id="cat-add">＋ 新增分類</button></div>
+          <div class="headrow" id="cat-new" hidden>
+            <label class="label" for="cat-new-name" hidden>新分類名稱</label>
+            <input id="cat-new-name" placeholder="輸入分類名稱，例：週會" style="flex:1;min-width:0">
+            <button class="btn-primary" id="cat-new-ok">新增</button>
+            <button class="btn-ghost" id="cat-new-cancel">取消</button>
+          </div>
+          <p class="err" id="cat-new-err" hidden></p>
         </section>
         <section class="panel">
           <h2>App 更新</h2>
@@ -969,10 +976,18 @@ function renderCatSettings(){
   });
 }
 function saveCats(){saveCfg();renderCatSelects();renderList()}
-$("cat-add").onclick=()=>{
-  const c={id:"c"+uid(),name:"新分類",template:"",_open:true};cfg.categories.push(c);saveCats();renderCatSettings();
-  const el=$("cat-name-"+c.id);if(el){el.focus();el.select()}
-};
+// 新增分類：先輸入名稱，按「新增」才建立；建立後保持收合
+function catNewShow(on){$("cat-new").hidden=!on;$("cat-add").hidden=on;$("cat-new-err").hidden=true;if(on){$("cat-new-name").value="";$("cat-new-name").focus()}}
+function catNewSubmit(){
+  const name=$("cat-new-name").value.trim(),err=$("cat-new-err");
+  if(!name){err.textContent="請輸入分類名稱。";err.hidden=false;return}
+  if(cfg.categories.some(c=>(c.name||"").trim()===name)){err.textContent=`已經有「${name}」這個分類。`;err.hidden=false;return}
+  cfg.categories.push({id:"c"+uid(),name,template:""});saveCats();renderCatSettings();catNewShow(false);toast(`已新增分類「${name}」`);
+}
+$("cat-add").onclick=()=>catNewShow(true);
+$("cat-new-ok").onclick=catNewSubmit;
+$("cat-new-cancel").onclick=()=>catNewShow(false);
+$("cat-new-name").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();catNewSubmit()}else if(e.key==="Escape")catNewShow(false)});
 
 // ================= App 更新 =================
 let updInfo=null;
