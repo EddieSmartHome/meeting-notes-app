@@ -37,7 +37,16 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # 原生函式庫編譯約 20 分鐘，依 sherpa-onnx 版本快取，AAR 打包失敗重跑時不必重編
+      - name: Cache native libs
+        id: jnicache
+        uses: actions/cache@v4
+        with:
+          path: sherpa/android/SherpaOnnxAar/sherpa_onnx/src/main/jniLibs
+          key: sherpa-jni-${{ inputs.sherpa_ref || 'db749e72258c1eef25d314c0e154eeb66bf09350' }}-v1
+
       - name: Build native libs (arm64-v8a, armeabi-v7a)
+        if: steps.jnicache.outputs.cache-hit != 'true'
         working-directory: sherpa
         run: |
           export ANDROID_NDK=$ANDROID_NDK_LATEST_HOME
@@ -54,7 +63,15 @@ jobs:
       - name: Build AAR
         working-directory: sherpa/android/SherpaOnnxAar
         run: |
-          ./gradlew :sherpa_onnx:assembleRelease --no-daemon
+          ls -la; ls sherpa_onnx/src/main/jniLibs/*
+          # 失敗時把最後的錯誤訊息寫成 annotation，方便在 Actions 摘要看到
+          if ! ./gradlew :sherpa_onnx:assembleRelease --no-daemon --stacktrace > gradle.log 2>&1; then
+            grep -E "error|Error|FAILURE|What went wrong|wrong:|Could not|> " gradle.log | tail -40 > err.txt || true
+            [ -s err.txt ] || tail -40 gradle.log > err.txt
+            echo "::error title=AAR build failed::$(sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g' err.txt)"
+            exit 1
+          fi
+          tail -5 gradle.log
           mkdir -p $GITHUB_WORKSPACE/out
           cp sherpa_onnx/build/outputs/aar/sherpa_onnx-release.aar $GITHUB_WORKSPACE/out/sherpa-onnx.aar
           ls -lh $GITHUB_WORKSPACE/out
