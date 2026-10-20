@@ -16,7 +16,8 @@
 10. 修改任何功能前，先詢問是否推進版本號（或由使用者主動指示）；推進時須比對與上一版的差異，再補上新版說明
 11. 會議記錄要能自訂分類，分類可綁定會議記錄格式（v1.0.9）
 12. 提供 App 內版本更新按鈕，查 GitHub 最新版並自動下載安裝（v1.0.9）
-13. 開啟 App 時自動檢查並自動更新；repo 改為公開，不需權杖（v1.0.9 同版補充）
+13. 開啟 App 時自動檢查並自動更新；repo 改為公開（v2.0.0）
+14. repo 公開後移除 GitHub 存取權杖功能，設定頁不要出現用不到的說明（v2.0.1）
 
 ## 關鍵決定與原因
 
@@ -57,7 +58,7 @@
 - **備份與還原（v1.0.8）**：JSZip 打包成 .zip，結構為 `backup.json`（格式版本、會議索引、設定）＋ `meetings/<日期_名稱>/`（`meeting.json`、`逐字稿.txt`、`會議記錄.md`、`錄音.webm`、`待轉錄/`）。存到手機用 Filesystem 寫入 `Documents/會議速記/`，大檔分段以 base64 append 寫入；分享先寫到 Cache 再用 Share 外掛分享。還原以會議 id 比對，可略過或覆蓋
 - **版本顯示**：`APP_VERSION` 在編譯時由 `VERSION` 檔替換，顯示在側邊選單最下方
 - **會議分類（v1.0.9）**：分類存在設定 `cfg.categories[{id,name,template}]`，會議以 `m.cat` 記錄分類 id；`buildPrompt` 依分類的 `template` 取代預設輸出格式。左側清單篩選存在 `cfg.catFilter`
-- **App 更新（v1.0.9）**：以 `cfg.ghToken` 呼叫 `GET /repos/{repo}/releases/latest`，比對 tag 與 `APP_VERSION`。下載私人 repo 的 APK：先用 CapacitorHttp（`disableRedirects`）向資產 API 取得 302 暫時網址，再用 Filesystem `downloadFile` 存到 Cache，最後以 file-opener 開啟安裝程式。repo 名稱在編譯時由 `github.repository` 寫入 `APP_REPO`。需 `REQUEST_INSTALL_PACKAGES` 權限；首次安裝時 Android 會要求允許本 App 安裝不明來源應用程式
+- **App 更新**：開啟 App 時呼叫公開的 `GET /repos/{repo}/releases/latest`（不帶權杖），比對 tag 與 `APP_VERSION`；有新版就用 Filesystem `downloadFile` 從 `browser_download_url` 下載 APK 到 Cache，再以 file-opener 開啟安裝程式。錄音中延後到錄音結束。repo 名稱在編譯時由 `github.repository` 寫入 `APP_REPO`。需 `REQUEST_INSTALL_PACKAGES` 權限；首次安裝時 Android 會要求允許本 App 安裝不明來源應用程式。v1.0.9 曾支援私人 repo 權杖，v2.0.1 移除
 
 ## 發布流程
 

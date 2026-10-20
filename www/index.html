@@ -311,22 +311,7 @@ audio{width:100%;height:40px}
         </section>
         <section class="panel">
           <h2>App 更新</h2>
-          <div class="field full help">
-            <strong>開啟 App 時會自動檢查新版本，有新版就自動下載並跳出安裝畫面，按「更新」即可。</strong>
-            <span class="note">repo 是公開的就不用填權杖。只有 repo 設為私人時，才需要一個只能讀取這個 repo 的 GitHub 存取權杖：</span>
-            <ol>
-              <li>用瀏覽器開啟 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>，登入 GitHub</li>
-              <li>名稱隨意填，例如「會議速記更新」；到期日依需要選擇</li>
-              <li>Repository access 選「Only select repositories」，只勾選這個 App 的 repo</li>
-              <li>Permissions → Repository permissions → Contents 設為「Read-only」</li>
-              <li>按「Generate token」，複製產生的整串權杖，貼到下方欄位</li>
-            </ol>
-            <span class="note">權杖到期後，檢查更新會顯示「權杖無效」，再依同樣步驟產生一個新的即可。</span>
-          </div>
-          <div class="grid">
-            <div class="field full"><label class="label" for="s-ghToken">GitHub 存取權杖（私人 repo 才需要）</label><input id="s-ghToken" type="password" autocomplete="off" placeholder="貼上權杖"></div>
-            <div class="field full"><label class="label" for="s-ghRepo">GitHub repo（擁有者/名稱）</label><input id="s-ghRepo" autocomplete="off"></div>
-          </div>
+          <p class="note">開啟 App 時會自動檢查新版本，有新版就自動下載並跳出安裝畫面，按「更新」即可。錄音中不會打擾，會等錄音結束。</p>
           <div class="headrow"><button id="s-update-check">檢查更新</button></div>
         </section>
         <div><button class="btn-primary" id="btn-settings-done">完成</button></div>
@@ -410,10 +395,11 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",ghToken:"",ghRepo:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh"},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh"},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
 const sttReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
+delete cfg.ghToken;delete cfg.ghRepo; // v2.0.1 起不再使用
 const minReady=()=>!!(cfg.minEngine==="claude"?cfg.anthKey:cfg.gemKey);
 if(!Array.isArray(cfg.categories))cfg.categories=[];
 const catOf=m=>m&&m.cat?cfg.categories.find(c=>c.id===m.cat)||null:null;
@@ -934,14 +920,13 @@ $("btn-share").onclick=async()=>{const m=curM();
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
-$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();if(!cfg.ghRepo&&!APP_REPO.startsWith("__"))$("s-ghRepo").value=APP_REPO;closeSide()};
+$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
-const SET=[["s-ghToken","ghToken"],["s-ghRepo","ghRepo"],["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"]];
+const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
 function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=el.dataset.eng!==cfg.sttEngine);document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
 SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
   if((k==="gemKey"||k==="groqKey")&&cfg[k]){toast("金鑰已儲存");retryAll()}
-  if(k==="ghToken"&&cfg[k])toast("權杖已儲存");
   if(k==="sttEngine"||k==="gemModel")retryAll()})});
 engUI();
 if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
@@ -993,21 +978,19 @@ $("cat-add").onclick=()=>{
 let updInfo=null;
 function cmpVer(a,b){const pa=String(a).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0),pb=String(b).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0);for(let i=0;i<Math.max(pa.length,pb.length);i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d>0?1:-1}return 0}
 const curVer=()=>APP_VERSION.startsWith("__")?"0.0.0":APP_VERSION;
-const repoName=()=>(cfg.ghRepo||(APP_REPO.startsWith("__")?"":APP_REPO)).trim();
+const repoName=()=>APP_REPO.startsWith("__")?"":APP_REPO;
 function updShow(){$("upd").hidden=false}
 function updMsg(t){$("upd-msg").textContent=t}
 function updReset(){["upd-notes","upd-meter","upd-hint","upd-install","upd-link"].forEach(id=>$(id).hidden=true);$("upd-install").disabled=false;$("upd-bar").style.width="0"}
 $("upd-close").onclick=()=>{$("upd").hidden=true};
-function ghHeaders(accept){const h={"Accept":accept,"X-GitHub-Api-Version":"2022-11-28"};if(cfg.ghToken)h.Authorization="Bearer "+cfg.ghToken;return h}
 async function fetchLatest(){
   const repo=repoName();
-  if(!/^[\w.-]+\/[\w.-]+$/.test(repo))throw Object.assign(new Error("GitHub repo 格式不正確，請到設定填寫「擁有者/名稱」。"),{setup:true});
+  if(!repo)throw new Error("開發版無法檢查更新。");
   let r;
-  try{r=await fetch(`https://api.github.com/repos/${repo}/releases/latest`,{headers:ghHeaders("application/vnd.github+json")})}
+  try{r=await fetch(`https://api.github.com/repos/${repo}/releases/latest`,{headers:{"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}})}
   catch(e){throw new Error("網路連線失敗，請確認網路後再試。")}
   const data=await r.json().catch(()=>({}));
-  if(r.status===401)throw Object.assign(new Error("GitHub 存取權杖無效或已過期。請到設定重新產生並貼上。"),{setup:true});
-  if(r.status===404)throw Object.assign(new Error(cfg.ghToken?"找不到這個 repo 的版本。請確認 repo 名稱正確，且權杖有這個 repo 的讀取權限。":"找不到這個 repo 的版本。若 repo 是私人的，請到 ☰ → 設定 →「App 更新」填入 GitHub 存取權杖。"),{setup:true});
+  if(r.status===404)throw new Error("目前查不到已發布的版本，請稍後再試。");
   if(r.status===403||r.status===429)throw new Error("GitHub 查詢次數暫時達到上限，請稍後再試。");
   if(!r.ok)throw new Error("檢查更新失敗："+((data&&data.message)||("HTTP "+r.status)));
   const asset=(data.assets||[]).find(a=>/\.apk$/i.test(a.name));
@@ -1049,17 +1032,10 @@ async function installUpdate(){
   try{
     updMsg("準備下載…");
     try{await FS.rmdir({path:"update",directory:"CACHE",recursive:true})}catch(e){}
-    // 私人 repo 的 APK 需帶權杖向 API 取得暫時下載網址
-    let dl=info.asset.url, headers=ghHeaders("application/octet-stream");
-    try{
-      const r=await PL.CapacitorHttp.request({method:"GET",url:info.asset.url,headers,disableRedirects:true,responseType:"text"});
-      const loc=r&&r.headers&&(r.headers.Location||r.headers.location);
-      if(r.status>=300&&r.status<400&&loc){dl=loc;headers={}}
-      else if(r.status===401)throw Object.assign(new Error("GitHub 存取權杖無效或已過期。"),{stop:true});
-    }catch(e){if(e.stop)throw e}
+    const dl=info.asset.browser_download_url;
     ph=await FS.addListener("progress",p=>{if(p&&p.contentLength){const pc=Math.min(100,Math.round(p.bytes/p.contentLength*100));$("upd-bar").style.width=pc+"%";updMsg(`下載中… ${pc}%（${(p.bytes/1048576).toFixed(1)} MB）`)}});
     updMsg("下載中…");
-    await FS.downloadFile({url:dl,path,directory:"CACHE",headers,progress:true,recursive:true});
+    await FS.downloadFile({url:dl,path,directory:"CACHE",progress:true,recursive:true});
     const st=await FS.stat({path,directory:"CACHE"});
     if(info.asset.size&&st.size&&Math.abs(st.size-info.asset.size)>1024)throw new Error("下載的檔案不完整，請再試一次。");
     $("upd-bar").style.width="100%";
@@ -1109,7 +1085,7 @@ async function buildBackup(onProg){
   const zip=new JSZip(), used=new Set(), index=[];
   const settings={...cfg};delete settings.lastBackup;
   delete settings.latestSeen;delete settings.lastUpdateCheck;settings.categories=cfg.categories.map(({_open,...c})=>c);
-  if(!withKeys){delete settings.gemKey;delete settings.groqKey;delete settings.anthKey;delete settings.ghToken}
+  if(!withKeys){delete settings.gemKey;delete settings.groqKey;delete settings.anthKey}
   for(let n=0;n<list.length;n++){
     const m=list[n];
     let base=safeName(`${(m.date||"").slice(0,10)}_${m.title||"未命名會議"}`),f=base,k=2;
@@ -1220,9 +1196,10 @@ $("r-go").onclick=async()=>{
       if(cur&&cur.id===m.id){cur=m;audioFor=null}
     }
     if($("r-settings").checked&&rMeta.settings){
-      const keep={gemKey:cfg.gemKey,groqKey:cfg.groqKey,anthKey:cfg.anthKey,ghToken:cfg.ghToken,lastBackup:cfg.lastBackup};
+      const keep={gemKey:cfg.gemKey,groqKey:cfg.groqKey,anthKey:cfg.anthKey,lastBackup:cfg.lastBackup};
       Object.assign(cfg,rMeta.settings);
-      for(const k of ["gemKey","groqKey","anthKey","ghToken"])if(!rMeta.settings[k])cfg[k]=keep[k];
+      for(const k of ["gemKey","groqKey","anthKey"])if(!rMeta.settings[k])cfg[k]=keep[k];
+      delete cfg.ghToken;delete cfg.ghRepo;
       cfg.lastBackup=keep.lastBackup;saveCfg();
       SET.forEach(([id,k])=>{$(id).value=cfg[k]||""});engUI();$("out-lang").value=cfg.out||"zh";
     }
