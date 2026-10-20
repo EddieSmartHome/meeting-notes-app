@@ -1,0 +1,13 @@
+{
+  "appId": "tw.eddiehsu.meetingnotes",
+  "appName": "會議速記",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

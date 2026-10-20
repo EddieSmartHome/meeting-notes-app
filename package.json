@@ -1,0 +1,22 @@
+{
+  "name": "meeting-notes-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "會議速記：中英文會議錄音、逐字稿與會議記錄 Android App",
+  "scripts": {
+    "android:add": "cap add android",
+    "android:sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor-community/file-opener": "7.0.1",
+    "@capacitor-community/keep-awake": "7.1.0",
+    "@capacitor/android": "7.6.8",
+    "@capacitor/core": "7.6.8",
+    "@capacitor/filesystem": "7.1.8",
+    "@capacitor/share": "7.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "3.0.5",
+    "@capacitor/cli": "7.6.8"
+  }
+}

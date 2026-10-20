@@ -1,0 +1,149 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Check Android SDK (preinstalled on GitHub runners)
+        run: echo "ANDROID_HOME=$ANDROID_HOME" && ls "$ANDROID_HOME/platforms" | tail -3
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Create Android project
+        run: |
+          npx cap add android
+          M=android/app/src/main/AndroidManifest.xml
+          sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />#' $M
+          # 備份存到「文件」資料夾：Android 10 需 legacy storage；大檔案需 largeHeap
+          sed -i 's#<application#<application android:requestLegacyExternalStorage="true" android:largeHeap="true"#' $M
+          grep -n "permission\|<application" $M
+
+      # 把版本號與 repo 寫進 App（版本顯示、檢查更新用）
+      - name: Stamp version into web app
+        run: |
+          V=$(tr -d '[:space:]' < VERSION)
+          sed -i "s/__APP_VERSION__/$V/" www/index.html
+          sed -i "s#__APP_REPO__#${{ github.repository }}#" www/index.html
+          grep -o 'APP_\(VERSION\|REPO\)="[^"]*"' www/index.html
+
+      - name: Generate app icons
+        continue-on-error: true
+        run: npx capacitor-assets generate --android --iconBackgroundColor '#1f6f5c' --iconBackgroundColorDark '#1f6f5c'
+
+      - name: Sync web assets and plugins
+        run: npx cap sync android
+
+      # 簽章金鑰存在 GitHub Secrets（SIGNING_KEYSTORE_BASE64），不放在 repo 裡
+      # 必須一直使用同一把金鑰，新版才能覆蓋安裝舊版
+      - name: Use fixed signing key
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "::error::缺少 SIGNING_KEYSTORE_BASE64 這個 Secret（Settings → Secrets and variables → Actions）"
+            exit 1
+          fi
+          mkdir -p signing
+          echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > signing/debug.keystore
+          cat >> android/app/build.gradle <<'GRADLE'
+
+          android {
+              signingConfigs {
+                  debug {
+                      storeFile rootProject.file("../signing/debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.debug
+                  }
+              }
+          }
+          GRADLE
+          tail -18 android/app/build.gradle
+
+      # 版號由 VERSION 檔決定；versionCode 用執行次數，確保每次都能覆蓋安裝
+      - name: Set version
+        run: |
+          V=$(tr -d '[:space:]' < VERSION)
+          echo "APP_VERSION=$V" >> "$GITHUB_ENV"
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" android/app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$V\"/" android/app/build.gradle
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      # 檢查 APK 簽章與固定金鑰一致，不一致就讓編譯失敗
+      - name: Verify APK signature
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          # 固定金鑰的憑證指紋（公開資訊，不是金鑰本身）
+          EXPECTED="39:22:B3:F0:AD:6E:AA:62:1C:9E:4C:23:F4:B9:63:0E:59:E8:95:17:DF:2F:0B:E1:D4:4B:EB:90:62:F4:3E:71"
+          ACTUAL=$(keytool -printcert -jarfile "$APK" | grep -m1 "SHA256:" | awk '{print $2}')
+          echo "expected: $EXPECTED"
+          echo "actual:   $ACTUAL"
+          [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ]
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk meeting-notes-v${{ env.APP_VERSION }}.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meeting-notes-apk
+          path: meeting-notes-v${{ env.APP_VERSION }}.apk
+
+      # 從 docs/CHANGELOG.md 取出本版的更新內容
+      - name: Prepare release notes
+        run: |
+          {
+            echo "NOTES<<EOF_NOTES"
+            awk -v v="## v$APP_VERSION" 'index($0,v)==1{f=1;next} /^#+ |^---/{if(f)exit} f' docs/CHANGELOG.md | sed -e '/^[[:space:]]*$/d'
+            echo "EOF_NOTES"
+          } >> "$GITHUB_ENV"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.APP_VERSION }}
+          name: 會議速記 v${{ env.APP_VERSION }}
+          make_latest: "true"
+          body: |
+            ## 本版更新
+            ${{ env.NOTES }}
+
+            ## 安裝
+            1. 用手機點下方 **Assets** 裡的 `meeting-notes-v${{ env.APP_VERSION }}.apk` 下載
+            2. 依提示允許「安裝未知應用程式」，直接覆蓋安裝即可，會議資料會保留
+            3. 第一次使用請到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰
+
+            完整說明請見 [README](https://github.com/${{ github.repository }}#readme)。
+          files: meeting-notes-v${{ env.APP_VERSION }}.apk

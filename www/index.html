@@ -1,0 +1,1265 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>會議速記</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: 左側會議清單（手機為抽屜）＋ 右側單欄工作區：會議資訊 → 錄音／播放列（黏頂）→ 逐字稿 → 會議記錄 */
+:root{
+  --bg:#f3f5f4; --surface:#ffffff; --side:#e9eeec; --fg:#17201d; --muted:#5e6b66; --line:#d8dfdc;
+  --accent:#1f6f5c; --accent-fg:#ffffff; --accent-soft:#e2efea;
+  --rec:#c2410c; --rec-soft:#fde9df; --warn:#9a6700; --play:#fff4c2;
+  --font-body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --side-w:290px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111715; --surface:#19211e; --side:#151c19; --fg:#e4ebe8; --muted:#94a39d; --line:#2c3833;
+  --accent:#4fb89b; --accent-fg:#0b1512; --accent-soft:#1d3029;
+  --rec:#fb7d4a; --rec-soft:#3a2117; --warn:#e3b341; --play:#3b3417; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111715; --surface:#19211e; --side:#151c19; --fg:#e4ebe8; --muted:#94a39d; --line:#2c3833;
+  --accent:#4fb89b; --accent-fg:#0b1512; --accent-soft:#1d3029;
+  --rec:#fb7d4a; --rec-soft:#3a2117; --warn:#e3b341; --play:#3b3417; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.6}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:40;background:var(--surface)}
+h1{font-size:1.1rem;margin:0;text-wrap:balance}
+h2{font-size:1rem;margin:0;font-weight:700}
+.label{font-size:.75rem;color:var(--muted);letter-spacing:.06em;font-weight:500}
+.note{font-size:.82rem;color:var(--muted);margin:0}
+.err{color:var(--rec);font-size:.88rem}
+
+input,select,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;width:100%}
+textarea{resize:vertical;min-height:90px}
+button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:8px 14px;font-weight:500}
+button:hover{border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn-primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn-rec{background:var(--rec);color:#fff;border-color:var(--rec)}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--muted);padding:6px 8px}
+.btn-ghost:hover{color:var(--fg);border-color:transparent}
+
+/* ---- 外框 ---- */
+.app{display:flex;min-height:100%}
+.side{background:var(--side);border-right:1px solid var(--line);width:var(--side-w);flex:none;display:flex;flex-direction:column;
+  position:sticky;top:0;height:100vh;padding-block:calc(env(safe-area-inset-top,0px) + 14px) calc(env(safe-area-inset-bottom,0px) + 12px);
+  padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:14px;gap:10px}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px;min-height:52px;padding-block:6px;
+  padding-left:max(12px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px))}
+.topbar h1{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.menu-btn{display:none;font-size:1.2rem;padding:4px 10px}
+.content{padding-block:16px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.col{max-width:780px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.scrim{display:none}
+@media (max-width:899px){
+  .menu-btn{display:inline-block}
+  .side{position:fixed;left:0;top:0;bottom:0;height:auto;z-index:50;width:min(86vw,320px);transform:translateX(-102%);transition:transform .22s ease}
+  .side.open{transform:none;box-shadow:0 0 30px rgba(0,0,0,.25)}
+  .scrim.open{display:block;position:fixed;inset:0;z-index:45;background:rgba(0,0,0,.35)}
+}
+@media (prefers-reduced-motion:reduce){.side{transition:none}}
+
+/* ---- 會議清單 ---- */
+.side-head{display:flex;align-items:center;gap:8px}
+.side-head strong{flex:1;font-size:1rem}
+.mlist{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px}
+.mitem{display:block;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:8px 10px;font-weight:400}
+.mitem:hover{background:var(--surface);border-color:var(--line)}
+.mitem.active{background:var(--surface);border-color:var(--accent)}
+.mitem .t{font-weight:700;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mitem .d{font-size:.78rem;color:var(--muted);font-variant-numeric:tabular-nums;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.badge{font-size:.68rem;border-radius:4px;padding:0 5px;border:1px solid currentColor;line-height:1.5}
+.badge.rec{color:var(--rec)} .badge.pend{color:var(--warn)}
+.side-foot{display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:10px}
+.mgroup{font-size:.72rem;color:var(--muted);letter-spacing:.06em;padding:8px 10px 2px}
+
+/* ---- 面板 ---- */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid .full{grid-column:1/-1}
+@media (max-width:560px){.grid{grid-template-columns:1fr}}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.headrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.spacer{flex:1}
+details.info summary{cursor:pointer;font-weight:700;list-style-position:inside}
+details.info[open] summary{margin-bottom:12px}
+.info-sum{font-weight:400;color:var(--muted);font-size:.85rem;margin-left:6px}
+
+/* ---- 錄音／播放列 ---- */
+.dock{position:sticky;top:calc(env(safe-area-inset-top,0px) + 52px);z-index:10}
+.recrow{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.timer{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:1.15rem;font-weight:600;margin-left:auto}
+.status{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted);min-width:0}
+.status span:last-child{overflow-wrap:anywhere}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line);flex:none}
+.recording .dot{background:var(--rec);animation:pulse 1.4s ease-in-out infinite}
+.recording.panel{border-color:var(--rec)}
+@keyframes pulse{50%{opacity:.3}}
+@media (prefers-reduced-motion:reduce){.recording .dot{animation:none}}
+.meter{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;border:1px solid var(--line)}
+.meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s linear}
+audio{width:100%;height:40px}
+.toggle{display:flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
+.toggle input{width:auto}
+.grid .toggle.full{grid-column:1/-1}
+.badge.cat{color:var(--accent);border-color:var(--accent)}
+.catlist{display:flex;flex-direction:column;gap:8px}
+.catitem{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.catitem summary{cursor:pointer;font-weight:700;display:flex;gap:8px;align-items:center}
+.catitem summary .tag{font-weight:400;font-size:.78rem;color:var(--muted)}
+.catitem[open] summary{margin-bottom:10px}
+.catitem .field+.field{margin-top:10px}
+.catitem textarea{min-height:170px;font-family:var(--font-mono);font-size:.82rem}
+.side-filter{display:flex;gap:6px}
+.ver-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ver-row button{padding:3px 10px;font-size:.8rem}
+.dot-new{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--rec);margin-left:4px;vertical-align:middle}
+.modal{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;
+  padding-block:calc(env(safe-area-inset-top,0px) + 16px) calc(env(safe-area-inset-bottom,0px) + 16px);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.modal .panel{width:min(560px,100%);max-height:100%;overflow-y:auto}
+.upd-notes{background:var(--bg);border-radius:8px;padding:8px 12px;font-size:.88rem;max-height:40vh;overflow-y:auto}
+.upd-notes h2{font-size:.95rem;border:0;margin:.6em 0 .2em}
+.help{background:var(--accent-soft);border-radius:8px;padding:12px 14px;gap:6px}
+.help ol{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:2px}
+.help a{color:var(--accent);font-weight:700;overflow-wrap:anywhere}
+
+/* ---- 逐字稿 ---- */
+.transcript{display:flex;flex-direction:column}
+.line{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
+.line:last-child{border-bottom:0}
+.line.key .txt{background:var(--accent-soft)}
+.line.playing{background:var(--play)}
+.ts{font-family:var(--font-mono);font-size:.8rem;color:var(--accent);font-variant-numeric:tabular-nums;padding-top:2px;border:0;background:none;padding-left:0;padding-right:0}
+.txt{min-width:0;overflow-wrap:anywhere;border-radius:4px;padding:0 4px}
+.txt[contenteditable="true"]{outline:2px solid var(--accent);cursor:text;background:var(--bg)}
+.acts{display:flex}
+.acts button{padding:2px 6px;font-size:.85rem}
+.empty{color:var(--muted);font-size:.9rem;padding:8px 0}
+.pending{font-size:.85rem;color:var(--warn);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+/* ---- 會議記錄 ---- */
+.minutes{min-width:0;overflow-wrap:anywhere}
+.minutes h1{font-size:1.2rem;margin:.2em 0 .4em}
+.minutes h2{font-size:1.02rem;margin:1.1em 0 .4em;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.minutes h3{font-size:.95rem;margin:1em 0 .3em}
+.minutes p{margin:.4em 0}
+.minutes ul,.minutes ol{margin:.3em 0;padding-left:1.4em}
+.minutes code{font-family:var(--font-mono);font-size:.85em;background:var(--bg);padding:1px 4px;border-radius:4px}
+.tbl{overflow-x:auto}
+.minutes table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.5em 0}
+.minutes th,.minutes td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.minutes th{background:var(--bg)}
+.confirm-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:.88rem;z-index:60;max-width:90vw}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side" aria-label="會議清單">
+    <div class="side-head"><strong>會議速記</strong></div>
+    <button class="btn-primary" id="btn-new">＋ 新會議</button>
+    <input id="search" type="search" placeholder="搜尋會議名稱、與會者、內容">
+    <div class="side-filter"><label class="label" for="cat-filter" hidden>分類篩選</label><select id="cat-filter" aria-label="分類篩選"></select></div>
+    <nav class="mlist" id="mlist"></nav>
+    <div class="side-foot">
+      <button class="btn-ghost" id="btn-backup" style="text-align:left">⤓ 備份與還原</button>
+      <button class="btn-ghost" id="btn-settings" style="text-align:left">⚙ 設定</button>
+      <span class="note" id="storage-note"></span>
+      <div class="ver-row"><span class="note" id="version-note"></span><button class="btn-ghost" id="btn-update">檢查更新</button></div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="btn-ghost menu-btn" id="btn-menu" aria-label="開啟會議清單">☰</button>
+      <h1 id="top-title">新會議</h1>
+      <button class="btn-ghost" id="btn-delete" hidden>刪除</button>
+    </header>
+
+    <div class="content">
+      <!-- 會議檢視 -->
+      <div class="col" id="view-meeting">
+        <details class="panel info" id="info-box" open>
+          <summary>會議資訊<span class="info-sum" id="info-sum"></span></summary>
+          <div class="grid">
+            <div class="field full"><label class="label" for="m-title">會議名稱</label><input id="m-title" placeholder="例：週一業務會議"></div>
+            <div class="field"><label class="label" for="m-date">日期時間</label><input id="m-date" type="datetime-local"></div>
+            <div class="field"><label class="label" for="m-place">地點／形式</label><input id="m-place" placeholder="例：二樓會議室"></div>
+            <div class="field full"><label class="label" for="m-cat">分類</label><select id="m-cat"></select></div>
+            <div class="field full"><label class="label" for="m-people">與會者</label><input id="m-people" placeholder="以逗號分隔，例：林經理, 張設計師, Amy"></div>
+          </div>
+        </details>
+
+        <section class="panel dock" id="recbar" aria-label="錄音控制">
+          <div class="recrow">
+            <button id="btn-rec" class="btn-rec">● 開始錄音</button>
+            <button id="btn-stop" disabled>結束</button>
+            <span class="timer" id="timer">00:00</span>
+          </div>
+          <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+          <div class="status"><span class="dot"></span><span id="status-text">按「開始錄音」，中英文會自動辨識</span></div>
+        </section>
+
+        <section class="panel dock" id="playbar" aria-label="錄音播放" hidden>
+          <audio id="player" controls preload="metadata"></audio>
+          <div class="headrow">
+            <label class="toggle"><input type="checkbox" id="follow" checked> 播放時自動捲動到目前段落</label>
+            <span class="spacer"></span>
+            <span class="note" id="play-note"></span>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-tr">
+          <div class="headrow">
+            <h2 id="h-tr">逐字稿</h2>
+            <span class="note" id="seg-count"></span>
+          </div>
+          <div class="pending" id="pending" hidden></div>
+          <div class="transcript" id="transcript"></div>
+          <p class="note" id="tr-hint">點任一段文字即從該處播放錄音；✎ 修改辨識錯字，☆ 標記重點。</p>
+        </section>
+
+        <section class="panel" aria-labelledby="h-min">
+          <div class="headrow">
+            <h2 id="h-min">會議記錄</h2>
+            <span class="spacer"></span>
+            <label class="label" for="out-lang">輸出語言</label>
+            <select id="out-lang" style="width:auto">
+              <option value="zh">繁體中文</option>
+              <option value="en">English</option>
+              <option value="both">中英對照</option>
+            </select>
+          </div>
+          <div class="headrow">
+            <button id="btn-gen" class="btn-primary">產生會議記錄</button>
+            <button id="btn-prompt">複製提示詞</button>
+            <span class="spacer"></span>
+            <button class="btn-ghost" id="btn-copy" hidden>複製</button>
+            <button class="btn-ghost" id="btn-share" hidden>分享</button>
+          </div>
+          <div class="err" id="gen-err" hidden></div>
+          <div class="minutes" id="minutes"></div>
+        </section>
+      </div>
+
+      <!-- 設定 -->
+      <div class="col" id="view-settings" hidden>
+        <section class="panel">
+          <h2>語音轉文字</h2>
+          <div class="grid">
+            <div class="field full"><label class="label" for="s-sttEngine">轉錄服務</label>
+              <select id="s-sttEngine">
+                <option value="gemini">Google Gemini（免費方案）</option>
+                <option value="groq">Groq Whisper</option>
+              </select></div>
+            <div class="field full help" data-eng="gemini">
+              <strong>如何取得 Gemini API 金鑰（免費，約 2 分鐘）</strong>
+              <ol>
+                <li>用瀏覽器開啟 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>，以 Google 帳號登入</li>
+                <li>第一次使用需同意服務條款</li>
+                <li>按「Create API key」（建立 API 金鑰），選擇或新建一個專案</li>
+                <li>複製產生的整串金鑰，貼到下方欄位</li>
+              </ol>
+              <span class="note">不需要綁信用卡。按鈕名稱若因 Google 改版而不同，找「API key」相關選項即可。金鑰請勿分享給他人。</span>
+            </div>
+            <div class="field full" data-eng="gemini"><label class="label" for="s-gemKey">Gemini API 金鑰</label><input id="s-gemKey" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
+            <div class="field" data-eng="gemini"><label class="label" for="s-gemModel">Gemini 模型</label><input id="s-gemModel"></div>
+            <div class="field full" data-eng="groq"><label class="label" for="s-groq">Groq API 金鑰</label><input id="s-groq" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
+            <div class="field" data-eng="groq"><label class="label" for="s-stt">Whisper 模型</label>
+              <select id="s-stt">
+                <option value="whisper-large-v3">whisper-large-v3（較準確）</option>
+                <option value="whisper-large-v3-turbo">whisper-large-v3-turbo（較便宜）</option>
+              </select></div>
+            <div class="field full"><label class="label" for="s-vocab">常用專有名詞（提高辨識率，以逗號分隔）</label><textarea id="s-vocab" placeholder="例：產品代號、品牌名稱、客戶名稱、專業術語"></textarea></div>
+          </div>
+          <p class="note">錄音每 10–25 秒依停頓切段送出轉錄，逐字稿約延遲 10–20 秒出現。沒有網路或超過免費額度時，錄音照常保存，之後自動補轉錄。</p>
+          <p class="note" data-eng="gemini">Gemini 免費方案的內容可能被 Google 用來改進模型，機密會議請留意。各模型的免費額度可在 aistudio.google.com/rate-limit 查看。</p>
+        </section>
+        <section class="panel">
+          <h2>會議記錄</h2>
+          <div class="grid">
+            <div class="field full"><label class="label" for="s-minEngine">整理服務</label>
+              <select id="s-minEngine">
+                <option value="gemini">Google Gemini（共用上方金鑰）</option>
+                <option value="claude">Claude（需 Anthropic API 金鑰）</option>
+              </select></div>
+            <div class="field full" data-min="claude"><label class="label" for="s-anth">Anthropic API 金鑰</label><input id="s-anth" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
+            <div class="field" data-min="claude"><label class="label" for="s-model">Claude 模型</label><input id="s-model"></div>
+            <div class="field"><label class="label" for="s-auto">轉錄完成後自動產生記錄</label><select id="s-auto"><option value="0">否</option><option value="1">是</option></select></div>
+          </div>
+          <p class="note">不想用 API 時，可按會議頁的「複製提示詞」貼到 Claude App 整理。金鑰、錄音與逐字稿都只存在這台手機上，移除 App 會一併刪除。</p>
+        </section>
+        <section class="panel">
+          <h2>會議分類</h2>
+          <p class="note">自訂會議的分類（例如：週會、客戶會議、專案檢討）。每個分類可以設定自己的會議記錄格式；沒有設定就用預設格式。</p>
+          <div class="catlist" id="cat-list"></div>
+          <div class="headrow"><button id="cat-add">＋ 新增分類</button></div>
+        </section>
+        <section class="panel">
+          <h2>App 更新</h2>
+          <div class="field full help">
+            <strong>開啟 App 時會自動檢查新版本，有新版就自動下載並跳出安裝畫面，按「更新」即可。</strong>
+            <span class="note">repo 是公開的就不用填權杖。只有 repo 設為私人時，才需要一個只能讀取這個 repo 的 GitHub 存取權杖：</span>
+            <ol>
+              <li>用瀏覽器開啟 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a>，登入 GitHub</li>
+              <li>名稱隨意填，例如「會議速記更新」；到期日依需要選擇</li>
+              <li>Repository access 選「Only select repositories」，只勾選這個 App 的 repo</li>
+              <li>Permissions → Repository permissions → Contents 設為「Read-only」</li>
+              <li>按「Generate token」，複製產生的整串權杖，貼到下方欄位</li>
+            </ol>
+            <span class="note">權杖到期後，檢查更新會顯示「權杖無效」，再依同樣步驟產生一個新的即可。</span>
+          </div>
+          <div class="grid">
+            <div class="field full"><label class="label" for="s-ghToken">GitHub 存取權杖（私人 repo 才需要）</label><input id="s-ghToken" type="password" autocomplete="off" placeholder="貼上權杖"></div>
+            <div class="field full"><label class="label" for="s-ghRepo">GitHub repo（擁有者/名稱）</label><input id="s-ghRepo" autocomplete="off"></div>
+          </div>
+          <div class="headrow"><button id="s-update-check">檢查更新</button></div>
+        </section>
+        <div><button class="btn-primary" id="btn-settings-done">完成</button></div>
+      </div>
+
+      <!-- 備份與還原 -->
+      <div class="col" id="view-backup" hidden>
+        <section class="panel">
+          <h2>備份</h2>
+          <p class="note">備份檔是一個 .zip 壓縮檔，內含設定，以及每場會議的錄音、逐字稿與會議記錄。電腦上解壓縮就能直接查看。</p>
+          <div class="grid">
+            <div class="field"><label class="label" for="b-scope">範圍</label>
+              <select id="b-scope"><option value="all">全部會議</option><option value="cur">目前開啟的會議</option></select></div>
+            <div class="field"><label class="label" for="b-audio">錄音檔</label>
+              <select id="b-audio"><option value="1">包含</option><option value="0">不包含（檔案較小）</option></select></div>
+            <label class="toggle full"><input type="checkbox" id="b-keys"> 包含 API 金鑰（備份檔若外流，金鑰也會一起外流）</label>
+          </div>
+          <p class="note" id="b-summary"></p>
+          <div class="headrow">
+            <button class="btn-primary" id="b-local">存到手機</button>
+            <button id="b-share">分享／存到雲端硬碟</button>
+          </div>
+          <p class="note" id="b-status" aria-live="polite"></p>
+          <p class="note">「存到手機」會存到手機的「文件（Documents）／會議速記」資料夾，移除 App 也不會刪除。「分享／存到雲端硬碟」會開啟分享選單，選「雲端硬碟」即可上傳到 Google 雲端硬碟。</p>
+        </section>
+        <section class="panel">
+          <h2>還原</h2>
+          <p class="note">選擇之前備份的 .zip 檔，可以從手機的「文件」資料夾或 Google 雲端硬碟選取。</p>
+          <input type="file" id="r-file" accept=".zip,application/zip">
+          <div id="r-preview" hidden>
+            <p id="r-info"></p>
+            <div class="grid">
+              <div class="field"><label class="label" for="r-mode">手機上已有的同一場會議</label>
+                <select id="r-mode"><option value="skip">略過，保留手機上的版本</option><option value="overwrite">以備份檔覆蓋</option></select></div>
+              <label class="toggle full"><input type="checkbox" id="r-settings" checked> 一併還原設定</label>
+            </div>
+            <div class="headrow" style="margin-top:10px"><button class="btn-primary" id="r-go">開始還原</button></div>
+          </div>
+          <p class="note" id="r-status" aria-live="polite"></p>
+        </section>
+        <div><button class="btn-primary" id="btn-backup-done">完成</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal" id="upd" hidden role="dialog" aria-modal="true" aria-labelledby="upd-title">
+  <section class="panel">
+    <h2 id="upd-title">檢查更新</h2>
+    <p id="upd-msg"></p>
+    <div class="upd-notes minutes" id="upd-notes" hidden></div>
+    <div class="meter" id="upd-meter" hidden><i id="upd-bar"></i></div>
+    <p class="note" id="upd-hint" hidden>安裝程式開啟後按「更新」。若手機詢問是否允許「會議速記」安裝不明來源的應用程式，請允許，回到這裡再按一次「下載並安裝」。會議資料會保留。</p>
+    <div class="headrow">
+      <button class="btn-primary" id="upd-install" hidden>下載並安裝</button>
+      <a class="btn-ghost" id="upd-link" hidden target="_blank" rel="noopener">開啟 Release 頁面</a>
+      <span class="spacer"></span>
+      <button id="upd-close">關閉</button>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="vendor/opencc-cn2t.js"></script>
+<script src="vendor/fix-webm-duration.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const p2=n=>String(n).padStart(2,"0");
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const CAP=window.Capacitor;
+const NATIVE=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
+const PL=(CAP&&CAP.Plugins)||{};
+const APP_VERSION="__APP_VERSION__"; // 編譯時由 VERSION 檔填入
+const APP_REPO="__APP_REPO__"; // 編譯時填入 GitHub repo
+const toTW=(window.OpenCC&&OpenCC.Converter)?OpenCC.Converter({from:"cn",to:"twp"}):(s=>s);
+
+// ================= 設定 =================
+const CFGK="mtg-cfg-v2";
+const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const old1=lsGet("mtg-notes-cfg-v1")||{};
+const cfg=Object.assign({categories:[],catFilter:"",ghToken:"",ghRepo:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh"},lsGet(CFGK)||{});
+const saveCfg=()=>lsSet(CFGK,cfg);
+const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
+const sttReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
+const minReady=()=>!!(cfg.minEngine==="claude"?cfg.anthKey:cfg.gemKey);
+if(!Array.isArray(cfg.categories))cfg.categories=[];
+const catOf=m=>m&&m.cat?cfg.categories.find(c=>c.id===m.cat)||null:null;
+
+// ================= 工具 =================
+function fmt(s){s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return(h?h+":":"")+p2(m)+":"+p2(x)}
+function localNow(){const d=new Date();return`${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}T${p2(d.getHours())}:${p2(d.getMinutes())}`}
+function dateLabel(v,withTime=true){if(!v)return"";const d=new Date(v);if(isNaN(d))return v;const w="日一二三四五六"[d.getDay()];return`${d.getFullYear()}/${p2(d.getMonth()+1)}/${p2(d.getDate())}（${w}）`+(withTime?` ${p2(d.getHours())}:${p2(d.getMinutes())}`:"")}
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+let tt=null;function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(tt);tt=setTimeout(()=>el.hidden=true,2400)}
+function status(t){$("status-text").textContent=t}
+
+// ================= IndexedDB =================
+let db=null;
+const req=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open("meeting-notes",1);
+  r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore("meetings",{keyPath:"id"});d.createObjectStore("audio",{keyPath:["mid","i"]});d.createObjectStore("chunks",{keyPath:["mid","start"]});};
+  r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);})}
+const os=(s,m)=>db.transaction(s,m||"readonly").objectStore(s);
+const dbPut=(s,v)=>req(os(s,"readwrite").put(v));
+const dbGetAll=(s,q)=>req(os(s).getAll(q));
+const dbDel=(s,k)=>req(os(s,"readwrite").delete(k));
+const midRange=mid=>IDBKeyRange.bound([mid,-Infinity],[mid,Infinity]);
+
+// ================= 狀態 =================
+let meetings=[];          // 記憶體中的會議清單
+let cur=null;             // 目前開啟的會議（null = 尚未存檔的新會議草稿）
+let draft={title:"",date:localNow(),place:"",people:""};
+let view="meeting";
+const curM=()=>cur||draft;
+
+function newMeetingObj(){return{id:uid(),title:draft.title,date:draft.date||localNow(),place:draft.place,people:draft.people,cat:draft.cat||(cfg.catFilter&&cfg.catFilter!=="none"?cfg.catFilter:""),segs:[],minutes:"",duration:0,mime:"",hasAudio:false,status:"new",createdAt:Date.now(),updatedAt:Date.now()}}
+async function ensureMeeting(){if(cur)return cur;cur=newMeetingObj();meetings.unshift(cur);await saveM(cur);renderList();return cur}
+async function saveM(m){m.updatedAt=Date.now();await dbPut("meetings",m)}
+
+// ================= 會議清單 =================
+function renderList(){
+  const q=$("search").value.trim().toLowerCase();
+  const box=$("mlist");box.textContent="";
+  const cf=cfg.catFilter||"";
+  const list=meetings.filter(m=>{const c=catOf(m);if(cf==="none"?!!c:(cf&&(!c||c.id!==cf)))return false;
+      return !q||[m.title,m.people,m.place,c?c.name:"",(m.segs||[]).map(s=>s.text).join(" ")].join(" ").toLowerCase().includes(q)})
+    .sort((a,b)=>(b.date||"").localeCompare(a.date||"")||b.createdAt-a.createdAt);
+  if(!list.length){const e=document.createElement("p");e.className="note";e.style.padding="8px 10px";e.textContent=(q||cf)?"找不到符合的會議":"還沒有會議。按「＋ 新會議」後開始錄音，每場會議都會保存在這裡。";box.appendChild(e);return}
+  let lastMonth="";
+  list.forEach(m=>{
+    const mon=(m.date||"").slice(0,7);
+    if(mon!==lastMonth){lastMonth=mon;const g=document.createElement("div");g.className="mgroup";g.textContent=mon?mon.replace("-"," 年 ")+" 月":"未設定日期";box.appendChild(g)}
+    const b=document.createElement("button");b.className="mitem"+(cur&&cur.id===m.id?" active":"");
+    const t=document.createElement("span");t.className="t";t.textContent=m.title||"未命名會議";
+    const d=document.createElement("span");d.className="d";
+    const dl=document.createElement("span");dl.textContent=dateLabel(m.date);d.appendChild(dl);
+    if(m.duration){const du=document.createElement("span");du.textContent="· "+fmt(m.duration);d.appendChild(du)}
+    const mc=catOf(m);if(mc){const bg=document.createElement("span");bg.className="badge cat";bg.textContent=mc.name||"未命名分類";d.appendChild(bg)}
+    if(m.status==="recording"&&R.mid===m.id){const bg=document.createElement("span");bg.className="badge rec";bg.textContent="錄音中";d.appendChild(bg)}
+    const pc=pendingCount[m.id]||0;if(pc){const bg=document.createElement("span");bg.className="badge pend";bg.textContent=`待轉錄 ${pc}`;d.appendChild(bg)}
+    b.append(t,d);
+    b.onclick=()=>{openMeeting(m.id);closeSide()};
+    box.appendChild(b);
+  });
+}
+$("search").addEventListener("input",renderList);
+function renderCatSelects(){
+  const opts=cfg.categories.map(c=>[c.id,c.name||"未命名分類"]);
+  const f=$("cat-filter");f.textContent="";
+  [["","全部分類"],...opts,["none","未分類"]].forEach(([v,t])=>f.add(new Option(t,v)));
+  if(![...f.options].some(o=>o.value===(cfg.catFilter||"")))cfg.catFilter="";
+  f.value=cfg.catFilter||"";
+  const s=$("m-cat");s.textContent="";
+  [["","未分類"],...opts].forEach(([v,t])=>s.add(new Option(t,v)));
+  const m=curM();s.value=m.cat&&catOf(m)?m.cat:"";
+}
+$("cat-filter").addEventListener("change",e=>{cfg.catFilter=e.target.value;saveCfg();renderList()});
+function openSide(){$("side").classList.add("open");$("scrim").classList.add("open")}
+function closeSide(){$("side").classList.remove("open");$("scrim").classList.remove("open")}
+$("btn-menu").onclick=openSide;$("scrim").onclick=closeSide;
+
+$("btn-new").onclick=()=>{
+  if(R.state!=="idle"){toast("錄音中，請先按「結束」再開新會議");return}
+  cur=null;draft={title:"",date:localNow(),place:"",people:""};showView("meeting");renderAll();closeSide();$("m-title").focus();
+};
+
+async function openMeeting(id){
+  if(R.state!=="idle"&&R.mid!==id){toast("錄音中，請先按「結束」再切換會議");return}
+  cur=meetings.find(m=>m.id===id)||null;showView("meeting");renderAll();
+}
+
+// 刪除（頁內二次確認）
+let delArm=null;
+$("btn-delete").onclick=async()=>{
+  if(!cur)return;
+  if(R.state!=="idle"&&R.mid===cur.id){toast("錄音中無法刪除");return}
+  const b=$("btn-delete");
+  if(!delArm){b.textContent="再按一次確認刪除";b.classList.add("btn-rec");delArm=setTimeout(()=>{delArm=null;b.textContent="刪除";b.classList.remove("btn-rec")},3500);return}
+  clearTimeout(delArm);delArm=null;b.textContent="刪除";b.classList.remove("btn-rec");
+  const id=cur.id;
+  await dbDel("meetings",id);await dbDel("audio",midRange(id));await dbDel("chunks",midRange(id));
+  meetings=meetings.filter(m=>m.id!==id);delete pendingCount[id];
+  cur=null;draft={title:"",date:localNow(),place:"",people:""};renderAll();toast("已刪除");updateStorage();
+};
+
+// ================= 會議資訊 =================
+const FIELDS=["title","date","place","people"];
+FIELDS.forEach(k=>{
+  $("m-"+k).addEventListener("input",async e=>{
+    const v=e.target.value;
+    if(!cur){draft[k]=v;if(k==="title"||k==="people"){await ensureMeeting();cur[k]=v}else return}
+    else cur[k]=v;
+    await saveM(cur);renderList();renderTitle();
+  });
+});
+$("m-cat").addEventListener("change",async e=>{
+  const v=e.target.value;
+  if(!cur){draft.cat=v;await ensureMeeting()}
+  cur.cat=v;await saveM(cur);renderList();renderInfo();
+});
+function renderInfo(){const m=curM();FIELDS.forEach(k=>{$("m-"+k).value=m[k]||""});renderCatSelects();
+  const c=catOf(m);
+  const sum=[c?c.name:"",dateLabel(m.date),m.people].filter(Boolean).join("・");$("info-sum").textContent=sum?"　"+sum:"";
+  $("info-box").open=!cur||!(cur.segs&&cur.segs.length)}
+function renderTitle(){const m=curM();$("top-title").textContent=cur?(m.title||"未命名會議"):"新會議";$("btn-delete").hidden=!cur}
+
+// ================= 逐字稿 =================
+let playingIdx=-1;
+function renderTranscript(){
+  const m=curM(),segs=m.segs||[];const box=$("transcript");box.textContent="";playingIdx=-1;
+  if(!segs.length){const e=document.createElement("div");e.className="empty";
+    e.textContent=cur&&cur.hasAudio?"這場會議還沒有逐字稿。":"開始錄音後，每講完一小段（約 10–20 秒），辨識好的文字會出現在這裡。";box.appendChild(e)}
+  segs.forEach((s,i)=>box.appendChild(segRow(s,i)));
+  $("seg-count").textContent=segs.length?`${segs.length} 段`:"";
+  $("tr-hint").hidden=!segs.length;
+}
+function segRow(s,i){
+  const row=document.createElement("div");row.className="line"+(s.key?" key":"");row.dataset.i=i;
+  const ts=document.createElement("button");ts.className="ts";ts.textContent=fmt(s.s);ts.setAttribute("aria-label","從 "+fmt(s.s)+" 播放");
+  const tx=document.createElement("div");tx.className="txt";tx.textContent=s.text;
+  const acts=document.createElement("div");acts.className="acts";
+  const ed=document.createElement("button");ed.className="btn-ghost";ed.textContent="✎";ed.title="修改";ed.setAttribute("aria-label","修改此段");
+  const st=document.createElement("button");st.className="btn-ghost";st.textContent=s.key?"★":"☆";st.title="標記重點";st.setAttribute("aria-label","標記重點");
+  const dl=document.createElement("button");dl.className="btn-ghost";dl.textContent="✕";dl.title="刪除此段";dl.setAttribute("aria-label","刪除此段");
+  acts.append(ed,st,dl);row.append(ts,tx,acts);
+  row.addEventListener("click",e=>{if(e.target.closest(".acts")||tx.isContentEditable)return;seekTo(s.s)});
+  ed.onclick=()=>{tx.contentEditable="true";tx.focus();const r=document.createRange();r.selectNodeContents(tx);r.collapse(false);const sel=getSelection();sel.removeAllRanges();sel.addRange(r)};
+  tx.addEventListener("blur",async()=>{if(!tx.isContentEditable)return;tx.contentEditable="false";const v=tx.textContent.trim();const m=curM();
+    if(v)s.text=v;else{m.segs.splice(m.segs.indexOf(s),1);renderTranscript()}if(cur)await saveM(cur)});
+  tx.addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();tx.blur()}});
+  st.onclick=async()=>{s.key=!s.key;if(cur)await saveM(cur);renderTranscript()};
+  dl.onclick=async()=>{const m=curM();m.segs.splice(m.segs.indexOf(s),1);if(cur)await saveM(cur);renderTranscript()};
+  return row;
+}
+
+// ================= 播放與同步 =================
+const player=$("player");let audioURL=null,audioFor=null;
+async function getAudioBlob(m){
+  const parts=(await dbGetAll("audio",midRange(m.id))).sort((a,b)=>a.i-b.i);
+  if(!parts.length)return null;
+  let blob=new Blob(parts.map(p=>p.blob),{type:(m.mime||parts[0].blob.type||"audio/webm").split(";")[0]});
+  if(/webm/.test(blob.type)&&m.duration&&window.ysFixWebmDuration){try{blob=await ysFixWebmDuration(blob,Math.round(m.duration*1000),{logger:false})}catch(e){}}
+  return blob;
+}
+async function loadPlayer(){
+  const m=cur;
+  if(!m||!m.hasAudio||(R.state!=="idle"&&R.mid===m.id)){$("playbar").hidden=true;return}
+  if(audioFor===m.id&&audioURL){$("playbar").hidden=false;return}
+  if(audioURL){URL.revokeObjectURL(audioURL);audioURL=null}
+  player.removeAttribute("src");
+  const blob=await getAudioBlob(m);
+  if(!blob){$("playbar").hidden=true;return}
+  if(cur!==m)return;
+  audioURL=URL.createObjectURL(blob);audioFor=m.id;player.src=audioURL;
+  $("play-note").textContent=`錄音 ${fmt(m.duration)}・${(blob.size/1048576).toFixed(1)} MB`;
+  $("playbar").hidden=false;
+}
+function seekTo(t){
+  if(!cur||!audioURL||$("playbar").hidden){if(R.state!=="idle")toast("錄音結束後即可點選段落播放");return}
+  try{player.currentTime=Math.max(0,t-0.3);player.play().catch(()=>{})}catch(e){}
+}
+function highlight(){
+  const m=cur;if(!m||!m.segs)return;const t=player.currentTime+0.15;let idx=-1;
+  for(let i=0;i<m.segs.length;i++){if(m.segs[i].s<=t)idx=i;else break}
+  if(idx>=0&&m.segs[idx].e&&t>m.segs[idx].e+1.5&&(!m.segs[idx+1]||m.segs[idx+1].s>t))idx=-1;
+  if(idx===playingIdx)return;
+  const box=$("transcript");
+  if(playingIdx>=0){const o=box.querySelector(`.line[data-i="${playingIdx}"]`);o&&o.classList.remove("playing")}
+  playingIdx=idx;
+  if(idx>=0){const n=box.querySelector(`.line[data-i="${idx}"]`);if(n){n.classList.add("playing");if($("follow").checked&&!player.paused)n.scrollIntoView({block:"center",behavior:"smooth"})}}
+}
+player.addEventListener("timeupdate",highlight);
+player.addEventListener("seeked",highlight);
+
+// ================= 錄音 =================
+const R={state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null,buf:null,mime:"",audioIdx:0,base:0,resumedAt:0,silentMs:0,floor:0.004,vad:null,tick:null,puts:[]};
+function activeTime(){return R.base+(R.state==="recording"?(performance.now()-R.resumedAt)/1000:0)}
+function pickMime(){const c=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg;codecs=opus"];for(const m of c){try{if(MediaRecorder.isTypeSupported(m))return m}catch(e){}}return""}
+
+async function recStart(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){status("這個裝置不支援錄音。");return}
+  const m=await ensureMeeting();
+  if(m.hasAudio){toast("這場會議已有錄音，請按「＋ 新會議」開始另一場");return}
+  status("啟動麥克風…");
+  try{R.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})}
+  catch(e){status(NATIVE?"無法使用麥克風：請到手機「設定 → 應用程式 → 會議速記 → 權限」開啟麥克風。":"無法使用麥克風："+(e.message||e.name));return}
+  R.mime=pickMime();R.mid=m.id;R.audioIdx=0;R.puts=[];
+  m.mime=R.mime;m.status="recording";m.hasAudio=true;if(!m.date)m.date=localNow();await saveM(m);
+  try{R.main=new MediaRecorder(R.stream,R.mime?{mimeType:R.mime,audioBitsPerSecond:32000}:{})}catch(e){R.main=new MediaRecorder(R.stream)}
+  R.main.ondataavailable=e=>{if(e.data&&e.data.size)R.puts.push(dbPut("audio",{mid:m.id,i:R.audioIdx++,blob:e.data}))};
+  R.main.onstop=()=>finalize(m);
+  R.main.start(3000);
+  try{R.ctx=new (window.AudioContext||window.webkitAudioContext)();const src=R.ctx.createMediaStreamSource(R.stream);R.an=R.ctx.createAnalyser();R.an.fftSize=2048;src.connect(R.an);R.buf=new Float32Array(R.an.fftSize)}catch(e){R.an=null}
+  R.base=0;R.resumedAt=performance.now();R.state="recording";R.silentMs=0;
+  segStart();
+  R.vad=setInterval(vadTick,100);
+  R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);
+  keepAwake(true);renderRecUI();renderList();
+  status(sttReady()?"錄音中，講完一段後文字會陸續出現":`錄音中。尚未設定 ${sttName()} 金鑰，錄音會先保存，設定後自動轉錄`);
+}
+function segStart(){
+  const info={start:activeTime(),end:null,voice:false,parts:[],mid:R.mid,mime:R.mime};
+  let rec;try{rec=new MediaRecorder(R.stream,R.mime?{mimeType:R.mime}:{})}catch(e){rec=new MediaRecorder(R.stream)}
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)info.parts.push(e.data)};
+  rec.onstop=()=>{const dur=(info.end??activeTime())-info.start;if(info.voice&&dur>0.8&&info.parts.length){enqueueChunk(info.mid,info.start,dur,new Blob(info.parts,{type:(rec.mimeType||info.mime||"audio/webm")}))}};
+  rec.start();R.seg=rec;R.cur=info;
+}
+function cutSeg(restart){if(!R.seg)return;R.cur.end=activeTime();const s=R.seg;R.seg=null;try{s.stop()}catch(e){}if(restart)segStart()}
+function vadTick(){
+  let rms=0;
+  if(R.an){R.an.getFloatTimeDomainData(R.buf);let sum=0;for(let i=0;i<R.buf.length;i++)sum+=R.buf[i]*R.buf[i];rms=Math.sqrt(sum/R.buf.length)}
+  else rms=0.05; // 無法偵測音量時一律視為有聲，只依時間切段
+  $("meter").style.width=Math.min(100,rms*900)+"%";
+  if(R.state!=="recording"||!R.cur)return;
+  R.floor=rms<R.floor?rms:R.floor*0.998+rms*0.002;
+  const voice=rms>Math.max(0.008,R.floor*3);
+  if(voice){R.cur.voice=true;R.silentMs=0}else R.silentMs+=100;
+  const len=activeTime()-R.cur.start;
+  if((len>=10&&R.silentMs>=500)||len>=25)cutSeg(true);
+  else if(!R.cur.voice&&len>=20)cutSeg(true);
+}
+function recPause(){
+  if(R.state!=="recording")return;
+  const t=activeTime();cutSeg(false);R.state="paused";R.base=t;
+  try{R.main.pause()}catch(e){}
+  clearInterval(R.tick);$("timer").textContent=fmt(t);keepAwake(false);renderRecUI();status("已暫停");
+}
+function recResume(){
+  if(R.state!=="paused")return;
+  try{R.main.resume()}catch(e){}
+  R.resumedAt=performance.now();R.state="recording";R.silentMs=0;segStart();
+  R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);keepAwake(true);renderRecUI();status("錄音中");
+}
+function recStop(){
+  if(R.state==="idle")return;
+  if(R.state==="recording")recPause();
+  R.state="stopping";renderRecUI();status("正在保存錄音…");
+  try{R.main.stop()}catch(e){finalize(meetings.find(m=>m.id===R.mid))}
+}
+async function finalize(m){
+  try{await Promise.all(R.puts)}catch(e){}
+  clearInterval(R.vad);clearInterval(R.tick);
+  try{R.stream.getTracks().forEach(t=>t.stop())}catch(e){}
+  try{R.ctx&&R.ctx.close()}catch(e){}
+  if(m){m.duration=R.base;m.status="done";await saveM(m)}
+  Object.assign(R,{state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null});
+  keepAwake(false);$("meter").style.width="0";
+  status(`已結束，錄音 ${fmt(m?m.duration:0)}`);
+  renderList();if(cur&&m&&cur.id===m.id){renderRecUI();await loadPlayer();updatePending()}
+  updateStorage();maybeAuto(m&&m.id);
+  if(autoPending)setTimeout(autoInstall,1500);
+}
+$("btn-rec").onclick=()=>{if(R.state==="idle")recStart();else if(R.state==="recording")recPause();else if(R.state==="paused")recResume()};
+$("btn-stop").onclick=recStop;
+
+function renderRecUI(){
+  const m=cur,mine=m&&R.mid===m.id;
+  const finished=m&&m.hasAudio&&!mine;
+  $("recbar").hidden=!!finished;
+  $("recbar").classList.toggle("recording",mine&&R.state==="recording");
+  const b=$("btn-rec");
+  if(mine&&R.state==="recording"){b.textContent="❚❚ 暫停";b.className=""}
+  else if(mine&&R.state==="paused"){b.textContent="● 繼續錄音";b.className="btn-rec"}
+  else{b.textContent="● 開始錄音";b.className="btn-rec"}
+  b.disabled=R.state==="stopping"||(R.state!=="idle"&&!mine);
+  $("btn-stop").disabled=!(mine&&(R.state==="recording"||R.state==="paused"));
+  if(!mine&&R.state==="idle"){$("timer").textContent="00:00";if(!finished)status(sttReady()?"按「開始錄音」，中英文會自動辨識":`尚未設定 ${sttName()} 金鑰：可先錄音，設定後自動轉錄（左側選單 → 設定）`)}
+}
+
+async function keepAwake(on){
+  const K=PL.KeepAwake;
+  if(K){try{on?await K.keepAwake():await K.allowSleep()}catch(e){}return}
+  try{if(on&&"wakeLock" in navigator)R.wake=await navigator.wakeLock.request("screen");else if(!on&&R.wake){R.wake.release();R.wake=null}}catch(e){}
+}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&R.state==="recording")keepAwake(true)});
+
+// ================= 轉錄佇列 =================
+const pendingCount={};let qBusy=false,qErr="";
+async function enqueueChunk(mid,start,dur,blob){
+  await dbPut("chunks",{mid,start,dur,blob,tries:0});
+  await updatePending();pump();
+}
+async function updatePending(){
+  const all=await dbGetAll("chunks");
+  for(const k in pendingCount)delete pendingCount[k];
+  all.forEach(c=>{pendingCount[c.mid]=(pendingCount[c.mid]||0)+1});
+  const n=cur?pendingCount[cur.id]||0:0;const el=$("pending");el.textContent="";
+  if(n){
+    const failed=all.filter(c=>cur&&c.mid===cur.id&&c.tries>=3).length;
+    const sp=document.createElement("span");
+    sp.textContent=!sttReady()?`${n} 段錄音等待轉錄（請先到設定填入 ${sttName()} 金鑰）`:failed?`${n} 段尚未轉錄，其中 ${failed} 段失敗：${qErr||"請檢查網路"}`:`轉錄中，還有 ${n} 段…`;
+    el.appendChild(sp);
+    if(failed||!qBusy){const b=document.createElement("button");b.className="btn-ghost";b.textContent="重試";b.onclick=retryAll;el.appendChild(b)}
+  }
+  el.hidden=!n;renderList();
+}
+async function retryAll(){const all=await dbGetAll("chunks");for(const c of all){if(c.tries>=3){c.tries=0;await dbPut("chunks",c)}}qErr="";updatePending();pump()}
+async function pump(){
+  if(qBusy||!sttReady())return;qBusy=true;
+  try{
+    for(;;){
+      const all=(await dbGetAll("chunks")).filter(c=>c.tries<3).sort((a,b)=>a.mid===b.mid?a.start-b.start:(a.mid<b.mid?-1:1));
+      const c=all.find(x=>x.mid===R.mid)||all[0];if(!c)break;
+      try{
+        const segs=await transcribe(c);
+        await addSegs(c.mid,segs);
+        await dbDel("chunks",[c.mid,c.start]);qErr="";
+      }catch(e){
+        qErr=e.message||String(e);
+        if(e.fatal){status(qErr);break}
+        c.tries++;await dbPut("chunks",c);
+        await sleep(e.wait||1500*c.tries);
+      }
+      await updatePending();
+    }
+  }finally{qBusy=false;await updatePending();maybeAuto()}
+}
+const HALLU=[/^(謝謝|感謝)(大家|各位)?(的)?(收看|觀看|收聽)/,/字幕(由|提供|製作)/,/Amara\.org/i,/請不吝點贊/,/訂閱.*(頻道|按讚)/,/明鏡與點點/,/^[\s.。…,，!！?？]+$/];
+function blobB64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]||"");r.onerror=()=>rej(r.error);r.readAsDataURL(b)})}
+function gemErr(r,data,what){
+  const msg=(data&&data.error&&data.error.message)||("HTTP "+r.status);
+  let er;
+  if(r.status===400&&/API key/i.test(msg)){er=new Error("Gemini 金鑰無效，請到設定重新填入");er.fatal=true}
+  else if(r.status===403){er=new Error("Gemini 金鑰沒有權限："+msg);er.fatal=true}
+  else if(r.status===404){er=new Error("找不到 Gemini 模型「"+cfg.gemModel+"」，請到設定修改模型名稱");er.fatal=true}
+  else if(r.status===429){er=new Error("Gemini 免費額度暫時用完，稍後自動重試");er.wait=30000}
+  else er=new Error(what+"失敗："+msg);
+  return er;
+}
+async function gemini(parts,schema){
+  const body={contents:[{role:"user",parts}],generationConfig:{temperature:0}};
+  if(schema){body.generationConfig.response_mime_type="application/json";body.generationConfig.response_schema=schema}
+  let r;
+  try{r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.gemModel||"gemini-3.8-flash")}:generateContent`,{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":cfg.gemKey},body:JSON.stringify(body)})}
+  catch(e){throw new Error("網路連線失敗，恢復後會自動重試")}
+  const data=await r.json().catch(()=>({}));
+  return {r,data,text:(((data.candidates||[])[0]||{}).content||{parts:[]}).parts.filter(p=>!p.thought&&p.text).map(p=>p.text).join("")};
+}
+const SEG_SCHEMA={type:"OBJECT",properties:{segments:{type:"ARRAY",items:{type:"OBJECT",properties:{start:{type:"NUMBER"},end:{type:"NUMBER"},text:{type:"STRING"}},required:["start","end","text"]}}},required:["segments"]};
+async function transcribe(c){return cfg.sttEngine==="groq"?transcribeGroq(c):transcribeGemini(c)}
+async function transcribeGemini(c){
+  const m=meetings.find(x=>x.id===c.mid);
+  const tail=m&&m.segs.length?m.segs.slice(-3).map(s=>s.text).join(" ").slice(-150):"";
+  const t=(c.blob.type||"audio/webm").split(";")[0];
+  const mime=/mp4|m4a/.test(t)?"audio/m4a":/ogg/.test(t)?"audio/ogg":/webm/.test(t)?"audio/webm":t;
+  const prompt=`請逐字轉錄這段台灣公司會議錄音（長度約 ${c.dur.toFixed(1)} 秒）。
+規則：
+1. 忠實轉錄實際說出的內容，不翻譯、不摘要、不補充沒說的字。
+2. 中文一律用台灣繁體中文；說英文的部分照原樣寫英文（中英夾雜時保持夾雜）。
+3. 依句子或語意停頓切段，每段給出相對於這段錄音開頭的開始秒數 start 與結束秒數 end（可有小數，不可超過錄音長度）。
+4. 沒有人說話、只有雜音或聽不清楚時，segments 回傳空陣列，不要猜測或編造內容。`+
+  (cfg.vocab?`\n常見專有名詞（聽到相近發音時優先使用）：${cfg.vocab}`:"")+
+  (tail?`\n前一段內容（僅供理解上下文，不要重複轉錄）：${tail}`:"");
+  const {r,data,text}=await gemini([{text:prompt},{inline_data:{mime_type:mime,data:await blobB64(c.blob)}}],SEG_SCHEMA);
+  if(!r.ok)throw gemErr(r,data,"轉錄");
+  let out;try{out=JSON.parse(text)}catch(e){throw new Error("轉錄結果格式錯誤，稍後重試")}
+  const segs=(out.segments||[]).map(x=>{const st=Math.min(Math.max(0,+x.start||0),c.dur);const en=Math.min(Math.max(st,+x.end||c.dur),c.dur);return{s:c.start+st,e:c.start+en,text:toTW(String(x.text||"").trim())}});
+  return segs.filter(s=>s.text&&!HALLU.some(re=>re.test(s.text)));
+}
+async function transcribeGroq(c){
+  const m=meetings.find(x=>x.id===c.mid);
+  const tail=m&&m.segs.length?m.segs.slice(-3).map(s=>s.text).join(" ").slice(-120):"";
+  const prompt=["以下是台灣公司的會議錄音，使用繁體中文，夾雜英文術語。",cfg.vocab?("專有名詞："+cfg.vocab+"。"):"",tail].filter(Boolean).join(" ");
+  const ext=/mp4/.test(c.blob.type)?"m4a":/ogg/.test(c.blob.type)?"ogg":"webm";
+  const fd=new FormData();
+  fd.append("file",new File([c.blob],"chunk."+ext,{type:c.blob.type||"audio/webm"}));
+  fd.append("model",cfg.stt);fd.append("response_format","verbose_json");fd.append("temperature","0");fd.append("prompt",prompt);
+  let r;
+  try{r=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{"Authorization":"Bearer "+cfg.groqKey},body:fd})}
+  catch(e){const er=new Error("網路連線失敗，恢復後會自動補轉錄");throw er}
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok){
+    const msg=(data.error&&data.error.message)||("HTTP "+r.status);
+    const er=new Error(r.status===401?"Groq 金鑰無效，請到設定重新填入":r.status===429?"Groq 用量達上限，稍後自動重試":"轉錄失敗："+msg);
+    if(r.status===401){er.fatal=true}
+    if(r.status===429){er.wait=20000}
+    throw er;
+  }
+  let segs=(data.segments||[]).filter(s=>!(s.no_speech_prob>0.6&&s.avg_logprob<-0.8)).map(s=>({s:c.start+(s.start||0),e:c.start+Math.min(s.end||c.dur,c.dur),text:toTW((s.text||"").trim())}));
+  if(!segs.length&&data.text)segs=[{s:c.start,e:c.start+c.dur,text:toTW(data.text.trim())}];
+  return segs.filter(s=>s.text&&!HALLU.some(re=>re.test(s.text)));
+}
+async function addSegs(mid,segs){
+  if(!segs.length)return;
+  const m=meetings.find(x=>x.id===mid);if(!m)return;
+  // 合併過短的片段，讓每段至少是一句完整的話
+  const merged=[];segs.forEach(s=>{const last=merged[merged.length-1];if(last&&s.s-last.e<0.6&&(last.text.length<14||s.text.length<6)&&last.text.length+s.text.length<90){last.text+=(/[A-Za-z0-9]$/.test(last.text)&&/^[A-Za-z0-9]/.test(s.text)?" ":"")+s.text;last.e=s.e}else merged.push({s:s.s,e:s.e,text:s.text,key:false})});
+  m.segs.push(...merged);m.segs.sort((a,b)=>a.s-b.s);await saveM(m);
+  if(cur&&cur.id===mid){
+    const box=$("transcript");const atEnd=merged.every((x,k)=>m.segs[m.segs.length-merged.length+k]===x);
+    if(atEnd&&box.querySelector(".line")){merged.forEach(x=>box.appendChild(segRow(x,m.segs.indexOf(x))));$("seg-count").textContent=`${m.segs.length} 段`;$("tr-hint").hidden=false}
+    else renderTranscript();
+    if(R.mid===mid){const last=box.lastElementChild;last&&last.scrollIntoView({block:"nearest",behavior:"smooth"})}
+  }
+}
+
+// ================= 會議記錄（Claude）=================
+const OUT={zh:"繁體中文（台灣用語）",en:"English",both:"中英對照（每個段落先繁體中文，再附英文）"};
+$("out-lang").value=cfg.out;$("out-lang").onchange=e=>{cfg.out=e.target.value;saveCfg()};
+const DEFAULT_TPL=`# 會議記錄：{會議名稱}
+（會議資訊條列：日期時間、地點、與會者）
+## 會議摘要
+（3–5 句）
+## 討論重點
+（依議題分組條列）
+## 決議事項
+（條列；無則寫「無」）
+## 待辦事項
+| 項目 | 負責人 | 期限 | 備註 |
+## 待確認事項
+（辨識不清或未有結論的事項；無則寫「無」）`;
+function buildPrompt(m){
+  const lines=m.segs.map(s=>`[${fmt(s.s)}]${s.key?"【重點】":""} ${s.text}`).join("\n");
+  const c=catOf(m), custom=!!(c&&(c.template||"").trim());
+  const tpl=custom?c.template.trim():DEFAULT_TPL;
+  const fmtRule=custom?`使用 Markdown 格式，依下列「${c.name||"自訂"}」格式輸出（括號內是填寫說明，請換成實際內容；格式中沒有的段落不要自行增加）：`:"使用 Markdown 格式，依下列結構輸出：";
+  return`你是專業的會議記錄秘書。以下是一場會議的語音辨識逐字稿，請整理成正式會議記錄。
+
+## 會議資訊
+- 會議名稱：${m.title||"未填"}
+- 日期時間：${m.date?dateLabel(m.date):"未填"}
+- 地點／形式：${m.place||"未填"}
+- 與會者：${m.people||"未填"}
+- 分類：${c?c.name:"未分類"}
+- 錄音長度：${fmt(m.duration)}
+
+## 整理原則
+1. 忠於逐字稿內容，不可自行補充未提及的事實、數字、人名或期限。
+2. 逐字稿為語音辨識結果，可能有同音錯字，中英文可能夾雜；只在語意明確時修正，不確定的地方以「（待確認：原文…）」標註。
+3. 標示【重點】的句子務必納入。
+4. 待辦事項的負責人與期限，只填逐字稿中明確提到的；未提到就寫「未指定」。
+5. 若提到相對日期（如「下週三」），保留原說法，並依會議日期推算實際日期附在括號內，同時標註星期幾。
+6. 可在討論重點後附上該議題在錄音中的時間點，例如（12:30）。
+7. 輸出語言：${OUT[cfg.out]}。
+8. ${fmtRule}
+
+${tpl}
+
+## 逐字稿
+${lines}`;
+}
+let genBusy=false;
+async function generate(m){
+  m=m||cur;const err=$("gen-err");if(cur===m)err.hidden=true;
+  if(!m||!m.segs.length){err.textContent="逐字稿是空的。";err.hidden=false;return}
+  if(!minReady()){err.textContent=(cfg.minEngine==="claude"?"尚未設定 Anthropic API 金鑰":"尚未設定 Gemini API 金鑰")+"（左側選單 → 設定），或改按「複製提示詞」貼到 Claude App。";err.hidden=false;return}
+  if(genBusy)return;genBusy=true;
+  const btn=$("btn-gen");btn.disabled=true;btn.textContent="整理中…";
+  if(cur===m)$("minutes").innerHTML='<p class="note">正在整理會議記錄，長會議約需 20–60 秒…</p>';
+  try{
+    if(cfg.minEngine!=="claude"){
+      const {r,data,text}=await gemini([{text:buildPrompt(m)}]);
+      if(!r.ok)throw gemErr(r,data,"產生");
+      if(!text)throw new Error("Gemini 沒有回傳內容，請再試一次");
+      m.minutes=text;await saveM(m);return;
+    }
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+      headers:{"content-type":"application/json","x-api-key":cfg.anthKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+      body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:8000,messages:[{role:"user",content:buildPrompt(m)}]})});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok){const msg=(data.error&&data.error.message)||("HTTP "+r.status);throw new Error(r.status===401?"Anthropic 金鑰無效，請到設定重新填入。":r.status===404?"找不到模型「"+cfg.model+"」，請到設定確認。":msg)}
+    m.minutes=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");await saveM(m);
+  }catch(e){if(cur===m){err.textContent="產生失敗："+(e.message||e);err.hidden=false}}
+  finally{genBusy=false;btn.disabled=false;btn.textContent=cur&&cur.minutes?"重新產生":"產生會議記錄";if(cur===m)renderMinutes()}
+}
+async function maybeAuto(mid){
+  if(cfg.auto!=="1"||!minReady())return;
+  const all=await dbGetAll("chunks");
+  meetings.filter(m=>m.status==="done"&&!m.minutes&&m.segs.length&&!m.autoTried&&(!mid||m.id===mid)&&!all.some(c=>c.mid===m.id)).slice(0,1).forEach(async m=>{m.autoTried=true;await saveM(m);generate(m)});
+}
+$("btn-gen").onclick=()=>generate();
+function renderMinutes(){
+  const m=curM();
+  $("btn-gen").textContent=m.minutes?"重新產生":"產生會議記錄";
+  if(!m.minutes){$("minutes").innerHTML='<p class="note">錄音與轉錄完成後按「產生會議記錄」。也可按「複製提示詞」貼到 Claude App 整理。</p>';$("btn-copy").hidden=$("btn-share").hidden=true;return}
+  $("minutes").innerHTML=md(m.minutes);$("btn-copy").hidden=false;$("btn-share").hidden=false;
+}
+function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function inl(s){return esc(s).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>")}
+function md(src){
+  const L=src.replace(/\r/g,"").split("\n");let out="",i=0;const cells=l=>l.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+  while(i<L.length){const l=L[i];if(/^\s*$/.test(l)){i++;continue}let m;
+    if((m=l.match(/^(#{1,3})\s+(.*)$/))){const n=m[1].length;out+=`<h${n}>${inl(m[2])}</h${n}>`;i++;continue}
+    if(/^\s*\|.*\|\s*$/.test(l)&&i+1<L.length&&/^\s*\|?\s*:?-{2,}/.test(L[i+1])){const head=cells(l);i+=2;let rows="";
+      while(i<L.length&&/^\s*\|.*\|\s*$/.test(L[i])){rows+="<tr>"+cells(L[i]).map(c=>`<td>${inl(c)}</td>`).join("")+"</tr>";i++}
+      out+=`<div class="tbl"><table><thead><tr>${head.map(c=>`<th>${inl(c)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;continue}
+    if(/^\s*([-*]|\d+\.)\s+/.test(l)){const ord=/^\s*\d+\./.test(l);let it="";while(i<L.length&&/^\s*([-*]|\d+\.)\s+/.test(L[i])){it+=`<li>${inl(L[i].replace(/^\s*([-*]|\d+\.)\s+/,""))}</li>`;i++}out+=ord?`<ol>${it}</ol>`:`<ul>${it}</ul>`;continue}
+    if(/^---+$/.test(l.trim())){i++;continue}
+    const para=[];while(i<L.length&&!/^\s*$/.test(L[i])&&!/^(#{1,3}\s|\s*([-*]|\d+\.)\s|\s*\|)/.test(L[i])){para.push(inl(L[i]));i++}
+    if(para.length)out+=`<p>${para.join("<br>")}</p>`;else i++}
+  return out;
+}
+async function copyText(t,ok){try{await navigator.clipboard.writeText(t);toast(ok)}catch(e){const ta=document.createElement("textarea");ta.value=t;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.select();try{document.execCommand("copy");toast(ok)}catch(_){toast("無法複製")}ta.remove()}}
+$("btn-copy").onclick=()=>copyText(curM().minutes,"已複製會議記錄");
+$("btn-prompt").onclick=()=>{const m=curM();if(!m.segs||!m.segs.length){toast("逐字稿是空的");return}copyText(buildPrompt(m),"已複製，貼到 Claude App 即可")};
+$("btn-share").onclick=async()=>{const m=curM();
+  if(PL.Share){try{await PL.Share.share({title:m.title||"會議記錄",text:m.minutes,dialogTitle:"分享會議記錄"})}catch(e){}return}
+  if(navigator.share){try{await navigator.share({title:m.title||"會議記錄",text:m.minutes})}catch(e){}return}
+  copyText(m.minutes,"已複製會議記錄");
+};
+
+// ================= 設定 =================
+function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
+  if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
+$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();if(!cfg.ghRepo&&!APP_REPO.startsWith("__"))$("s-ghRepo").value=APP_REPO;closeSide()};
+$("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
+const SET=[["s-ghToken","ghToken"],["s-ghRepo","ghRepo"],["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"]];
+const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
+function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=el.dataset.eng!==cfg.sttEngine);document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
+SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
+  if((k==="gemKey"||k==="groqKey")&&cfg[k]){toast("金鑰已儲存");retryAll()}
+  if(k==="ghToken"&&cfg[k])toast("權杖已儲存");
+  if(k==="sttEngine"||k==="gemModel")retryAll()})});
+engUI();
+if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
+async function updateStorage(){try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
+
+// ================= 會議分類設定 =================
+const catArm={};
+function renderCatSettings(){
+  const box=$("cat-list");box.textContent="";
+  if(!cfg.categories.length){const p=document.createElement("p");p.className="note";p.textContent="還沒有分類。按「＋ 新增分類」建立第一個。";box.appendChild(p)}
+  cfg.categories.forEach(c=>{
+    const d=document.createElement("details");d.className="catitem";d.open=!!c._open;
+    const sm=document.createElement("summary");const nm=document.createElement("span");nm.textContent=c.name||"未命名分類";
+    const tg=document.createElement("span");tg.className="tag";tg.textContent=(c.template||"").trim()?"自訂格式":"預設格式";
+    const cnt=meetings.filter(m=>m.cat===c.id).length;const ct=document.createElement("span");ct.className="tag";ct.textContent=`・${cnt} 場會議`;
+    sm.append(nm,tg,ct);d.appendChild(sm);
+    d.addEventListener("toggle",()=>{c._open=d.open});
+    const f1=document.createElement("div");f1.className="field";
+    const l1=document.createElement("label");l1.className="label";l1.textContent="分類名稱";l1.htmlFor="cat-name-"+c.id;
+    const i1=document.createElement("input");i1.id="cat-name-"+c.id;i1.value=c.name||"";i1.placeholder="例：週會";
+    i1.addEventListener("change",()=>{c.name=i1.value.trim();saveCats();nm.textContent=c.name||"未命名分類"});
+    f1.append(l1,i1);
+    const f2=document.createElement("div");f2.className="field";
+    const l2=document.createElement("label");l2.className="label";l2.textContent="會議記錄格式（留空則用預設格式；括號內寫給 AI 的填寫說明）";l2.htmlFor="cat-tpl-"+c.id;
+    const i2=document.createElement("textarea");i2.id="cat-tpl-"+c.id;i2.value=c.template||"";i2.placeholder=DEFAULT_TPL;
+    i2.addEventListener("change",()=>{c.template=i2.value;saveCats();tg.textContent=(c.template||"").trim()?"自訂格式":"預設格式"});
+    f2.append(l2,i2);
+    const row=document.createElement("div");row.className="headrow";row.style.marginTop="10px";
+    const b1=document.createElement("button");b1.textContent="填入預設格式再修改";
+    b1.onclick=()=>{i2.value=DEFAULT_TPL;c.template=DEFAULT_TPL;saveCats();tg.textContent="自訂格式"};
+    const sp=document.createElement("span");sp.className="spacer";
+    const b2=document.createElement("button");b2.className="btn-ghost";b2.textContent="刪除分類";
+    b2.onclick=()=>{
+      if(!catArm[c.id]){b2.textContent=cnt?`再按一次確認（${cnt} 場會議會變成未分類）`:"再按一次確認刪除";b2.classList.add("btn-rec");catArm[c.id]=setTimeout(()=>{delete catArm[c.id];b2.textContent="刪除分類";b2.classList.remove("btn-rec")},3500);return}
+      clearTimeout(catArm[c.id]);delete catArm[c.id];
+      cfg.categories=cfg.categories.filter(x=>x.id!==c.id);if(cfg.catFilter===c.id)cfg.catFilter="";saveCats();renderCatSettings();
+    };
+    row.append(b1,sp,b2);
+    d.append(f1,f2,row);box.appendChild(d);
+  });
+}
+function saveCats(){saveCfg();renderCatSelects();renderList()}
+$("cat-add").onclick=()=>{
+  const c={id:"c"+uid(),name:"新分類",template:"",_open:true};cfg.categories.push(c);saveCats();renderCatSettings();
+  const el=$("cat-name-"+c.id);if(el){el.focus();el.select()}
+};
+
+// ================= App 更新 =================
+let updInfo=null;
+function cmpVer(a,b){const pa=String(a).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0),pb=String(b).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0);for(let i=0;i<Math.max(pa.length,pb.length);i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d>0?1:-1}return 0}
+const curVer=()=>APP_VERSION.startsWith("__")?"0.0.0":APP_VERSION;
+const repoName=()=>(cfg.ghRepo||(APP_REPO.startsWith("__")?"":APP_REPO)).trim();
+function updShow(){$("upd").hidden=false}
+function updMsg(t){$("upd-msg").textContent=t}
+function updReset(){["upd-notes","upd-meter","upd-hint","upd-install","upd-link"].forEach(id=>$(id).hidden=true);$("upd-install").disabled=false;$("upd-bar").style.width="0"}
+$("upd-close").onclick=()=>{$("upd").hidden=true};
+function ghHeaders(accept){const h={"Accept":accept,"X-GitHub-Api-Version":"2022-11-28"};if(cfg.ghToken)h.Authorization="Bearer "+cfg.ghToken;return h}
+async function fetchLatest(){
+  const repo=repoName();
+  if(!/^[\w.-]+\/[\w.-]+$/.test(repo))throw Object.assign(new Error("GitHub repo 格式不正確，請到設定填寫「擁有者/名稱」。"),{setup:true});
+  let r;
+  try{r=await fetch(`https://api.github.com/repos/${repo}/releases/latest`,{headers:ghHeaders("application/vnd.github+json")})}
+  catch(e){throw new Error("網路連線失敗，請確認網路後再試。")}
+  const data=await r.json().catch(()=>({}));
+  if(r.status===401)throw Object.assign(new Error("GitHub 存取權杖無效或已過期。請到設定重新產生並貼上。"),{setup:true});
+  if(r.status===404)throw Object.assign(new Error(cfg.ghToken?"找不到這個 repo 的版本。請確認 repo 名稱正確，且權杖有這個 repo 的讀取權限。":"找不到這個 repo 的版本。若 repo 是私人的，請到 ☰ → 設定 →「App 更新」填入 GitHub 存取權杖。"),{setup:true});
+  if(r.status===403||r.status===429)throw new Error("GitHub 查詢次數暫時達到上限，請稍後再試。");
+  if(!r.ok)throw new Error("檢查更新失敗："+((data&&data.message)||("HTTP "+r.status)));
+  const asset=(data.assets||[]).find(a=>/\.apk$/i.test(a.name));
+  return {tag:data.tag_name,ver:String(data.tag_name||"").replace(/^v/,""),notes:data.body||"",url:data.html_url,asset};
+}
+async function checkUpdate(manual){
+  if(manual){updReset();$("upd-title").textContent="檢查更新";updMsg("檢查中…");updShow()}
+  try{
+    const info=await fetchLatest();updInfo=info;cfg.lastUpdateCheck=Date.now();cfg.latestSeen=info.ver;saveCfg();renderVersion();
+    if(!manual){
+      // 開啟 App 時自動更新：有新版就下載並跳出安裝畫面（錄音中會等錄音結束）
+      if(cmpVer(info.ver,curVer())>0&&NATIVE&&info.asset&&PL.FileOpener)autoInstall();
+      return;
+    }
+    if(cmpVer(info.ver,curVer())>0){
+      $("upd-title").textContent=`有新版本 v${info.ver}`;
+      updMsg(`目前版本 v${curVer()}，可以更新到 v${info.ver}。`);
+      if(info.notes){$("upd-notes").innerHTML=md(info.notes.split(/\n## 安裝/)[0]);$("upd-notes").hidden=false}
+      if(NATIVE&&info.asset&&PL.FileOpener){$("upd-install").hidden=false}
+      else{$("upd-link").href=info.url;$("upd-link").hidden=false;if(!info.asset)updMsg(`v${info.ver} 沒有附上 APK，請到 Release 頁面查看。`)}
+    }else{
+      $("upd-title").textContent="已是最新版";updMsg(`目前版本 v${curVer()} 就是最新版。`);
+    }
+  }catch(e){
+    if(manual){$("upd-title").textContent="無法檢查更新";updMsg(e.message||String(e))}
+  }
+}
+function renderVersion(){
+  const v=$("version-note");v.textContent=APP_VERSION.startsWith("__")?"開發版":"版本 v"+APP_VERSION;
+  const b=$("btn-update");b.textContent="檢查更新";
+  if(cfg.latestSeen&&cmpVer(cfg.latestSeen,curVer())>0){b.textContent="有新版本";const d=document.createElement("span");d.className="dot-new";b.appendChild(d)}
+}
+async function installUpdate(){
+  const info=updInfo;if(!info||!info.asset)return;
+  const btn=$("upd-install");btn.disabled=true;
+  $("upd-meter").hidden=false;$("upd-hint").hidden=true;
+  const path="update/meeting-notes-v"+info.ver+".apk";
+  let ph=null;
+  try{
+    updMsg("準備下載…");
+    try{await FS.rmdir({path:"update",directory:"CACHE",recursive:true})}catch(e){}
+    // 私人 repo 的 APK 需帶權杖向 API 取得暫時下載網址
+    let dl=info.asset.url, headers=ghHeaders("application/octet-stream");
+    try{
+      const r=await PL.CapacitorHttp.request({method:"GET",url:info.asset.url,headers,disableRedirects:true,responseType:"text"});
+      const loc=r&&r.headers&&(r.headers.Location||r.headers.location);
+      if(r.status>=300&&r.status<400&&loc){dl=loc;headers={}}
+      else if(r.status===401)throw Object.assign(new Error("GitHub 存取權杖無效或已過期。"),{stop:true});
+    }catch(e){if(e.stop)throw e}
+    ph=await FS.addListener("progress",p=>{if(p&&p.contentLength){const pc=Math.min(100,Math.round(p.bytes/p.contentLength*100));$("upd-bar").style.width=pc+"%";updMsg(`下載中… ${pc}%（${(p.bytes/1048576).toFixed(1)} MB）`)}});
+    updMsg("下載中…");
+    await FS.downloadFile({url:dl,path,directory:"CACHE",headers,progress:true,recursive:true});
+    const st=await FS.stat({path,directory:"CACHE"});
+    if(info.asset.size&&st.size&&Math.abs(st.size-info.asset.size)>1024)throw new Error("下載的檔案不完整，請再試一次。");
+    $("upd-bar").style.width="100%";
+    const {uri}=await FS.getUri({path,directory:"CACHE"});
+    updMsg("開啟安裝程式…");
+    await PL.FileOpener.open({filePath:uri,contentType:"application/vnd.android.package-archive"});
+    updMsg(`已下載 v${info.ver}，請在安裝畫面按「更新」。`);$("upd-hint").hidden=false;
+  }catch(e){
+    updMsg("更新失敗："+(e.message||e));
+  }finally{btn.disabled=false;try{ph&&ph.remove()}catch(e){}}
+}
+$("upd-install").onclick=installUpdate;
+let autoPending=false;
+function autoInstall(){
+  if(R.state!=="idle"){autoPending=true;return}
+  autoPending=false;
+  const info=updInfo;
+  updReset();$("upd-title").textContent=`自動更新到 v${info.ver}`;
+  updMsg(`目前版本 v${curVer()}，正在下載 v${info.ver}…`);
+  if(info.notes){$("upd-notes").innerHTML=md(info.notes.split(/\n## 安裝/)[0]);$("upd-notes").hidden=false}
+  $("upd-install").hidden=false;updShow();installUpdate();
+}
+$("btn-update").onclick=()=>{closeSide();checkUpdate(true)};
+$("s-update-check").onclick=()=>checkUpdate(true);
+
+// ================= 備份與還原 =================
+const FS=PL.Filesystem;
+const fileExt=t=>/mp4|m4a/.test(t||"")?"m4a":/ogg/.test(t||"")?"ogg":"webm";
+const safeName=x=>String(x).replace(/[\\/:*?"<>|\n\r\t]+/g,"_").replace(/\s+/g," ").trim().slice(0,60)||"未命名";
+function stamp(){const d=new Date();return`${d.getFullYear()}${p2(d.getMonth()+1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`}
+function transcriptText(m){
+  const head=[`會議名稱：${m.title||"未命名會議"}`,`日期時間：${m.date?dateLabel(m.date):"未填"}`,`地點／形式：${m.place||"未填"}`,`與會者：${m.people||"未填"}`,`錄音長度：${fmt(m.duration)}`,""];
+  return head.concat((m.segs||[]).map(x=>`[${fmt(x.s)}]${x.key?" ★":""} ${x.text}`)).join("\n")+"\n";
+}
+function bkSet(id,t){$(id).textContent=t}
+function backupList(){return $("b-scope").value==="cur"&&cur?[cur]:meetings.slice()}
+function renderBackupSummary(){
+  const list=backupList();
+  $("b-scope").options[1].disabled=!cur;
+  if($("b-scope").value==="cur"&&!cur)$("b-scope").value="all";
+  bkSet("b-summary",list.length?`將備份 ${list.length} 場會議${$("b-audio").value==="1"?"（含錄音）":"（不含錄音）"}。`:"目前沒有會議可以備份，只會備份設定。");
+  bkSet("b-status",cfg.lastBackup?`上次備份：${dateLabel(cfg.lastBackup)}`:"還沒有備份過。");
+}
+["b-scope","b-audio"].forEach(id=>$(id).addEventListener("change",renderBackupSummary));
+async function buildBackup(onProg){
+  const list=backupList(), withAudio=$("b-audio").value==="1", withKeys=$("b-keys").checked;
+  const zip=new JSZip(), used=new Set(), index=[];
+  const settings={...cfg};delete settings.lastBackup;
+  delete settings.latestSeen;delete settings.lastUpdateCheck;settings.categories=cfg.categories.map(({_open,...c})=>c);
+  if(!withKeys){delete settings.gemKey;delete settings.groqKey;delete settings.anthKey;delete settings.ghToken}
+  for(let n=0;n<list.length;n++){
+    const m=list[n];
+    let base=safeName(`${(m.date||"").slice(0,10)}_${m.title||"未命名會議"}`),f=base,k=2;
+    while(used.has(f))f=`${base}_${k++}`;used.add(f);
+    const dir=zip.folder("meetings/"+f);
+    const mj={...m};delete mj.autoTried;
+    let audioFile="",pending=[];
+    if(withAudio&&m.hasAudio){const b=await getAudioBlob(m);if(b){audioFile="錄音."+fileExt(b.type);dir.file(audioFile,b)}}
+    if(withAudio){
+      const ch=(await dbGetAll("chunks",midRange(m.id))).sort((a,b)=>a.start-b.start);
+      ch.forEach((c,i)=>{const fn=`待轉錄/${i+1}.${fileExt(c.blob.type)}`;dir.file(fn,c.blob);pending.push({file:fn,start:c.start,dur:c.dur,type:c.blob.type})});
+    }
+    if(!audioFile)mj.hasAudio=false;
+    dir.file("meeting.json",JSON.stringify(mj,null,1),{compression:"DEFLATE"});
+    dir.file("逐字稿.txt",transcriptText(m),{compression:"DEFLATE"});
+    if(m.minutes)dir.file("會議記錄.md",m.minutes,{compression:"DEFLATE"});
+    if(pending.length)dir.file("待轉錄/index.json",JSON.stringify(pending,null,1));
+    index.push({id:m.id,folder:f,title:m.title||"",date:m.date||"",audio:audioFile,pending:pending.length});
+    onProg(`整理資料中…（${n+1}/${list.length}）`);
+  }
+  zip.file("backup.json",JSON.stringify({format:"meeting-notes-backup",formatVersion:1,appVersion:APP_VERSION,createdAt:new Date().toISOString(),includesKeys:withKeys,includesAudio:withAudio,meetings:index,categories:cfg.categories.map(({_open,...c})=>c),settings},null,1),{compression:"DEFLATE"});
+  zip.file("說明.txt","會議速記備份檔\n\n- meetings/ 底下每個資料夾是一場會議：錄音、逐字稿.txt、會議記錄.md\n- 要還原時，在 App 的「備份與還原」選擇這個 .zip 檔\n- 請勿修改 backup.json 與 meeting.json，否則可能無法還原\n",{compression:"DEFLATE"});
+  return zip.generateAsync({type:"uint8array"},meta=>onProg(`壓縮中… ${Math.floor(meta.percent)}%`));
+}
+function u8ToB64(u8){let s="";const K=0x8000;for(let i=0;i<u8.length;i+=K)s+=String.fromCharCode.apply(null,u8.subarray(i,i+K));return btoa(s)}
+async function writeBinary(path,directory,bytes,onProg){
+  const CH=3*512*1024; // 3 的倍數，分段 base64 才能直接接起來
+  if(!bytes.length){await FS.writeFile({path,directory,data:"",recursive:true});return}
+  for(let off=0;off<bytes.length;off+=CH){
+    const b64=u8ToB64(bytes.subarray(off,Math.min(off+CH,bytes.length)));
+    if(off===0)await FS.writeFile({path,directory,data:b64,recursive:true});
+    else await FS.appendFile({path,directory,data:b64});
+    onProg(`寫入檔案中… ${Math.min(100,Math.round((off+CH)/bytes.length*100))}%`);
+  }
+}
+function browserDownload(bytes,name){
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([bytes],{type:"application/zip"}));a.download=name;
+  document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);
+}
+let bkBusy=false;
+async function runBackup(target){
+  if(bkBusy)return;
+  if(R.state!=="idle"){toast("錄音中無法備份，請先結束錄音");return}
+  bkBusy=true;["b-local","b-share"].forEach(id=>$(id).disabled=true);
+  const prog=t=>bkSet("b-status",t);
+  const name=`會議速記備份_${stamp()}.zip`;
+  try{
+    const bytes=await buildBackup(prog);
+    const mb=(bytes.length/1048576).toFixed(1);
+    if(!NATIVE||!FS){
+      if(target==="share"&&navigator.canShare){const file=new File([bytes],name,{type:"application/zip"});if(navigator.canShare({files:[file]})){await navigator.share({files:[file],title:name});done(`已分享 ${name}（${mb} MB）`);return}}
+      browserDownload(bytes,name);done(`已下載 ${name}（${mb} MB）`);return;
+    }
+    if(target==="local"){
+      try{const p=await FS.checkPermissions();if(p.publicStorage!=="granted")await FS.requestPermissions()}catch(e){}
+      await writeBinary(`會議速記/${name}`,"DOCUMENTS",bytes,prog);
+      done(`已存到手機「文件／會議速記」資料夾：${name}（${mb} MB）`);
+    }else{
+      try{await FS.rmdir({path:"backup",directory:"CACHE",recursive:true})}catch(e){}
+      await writeBinary(`backup/${name}`,"CACHE",bytes,prog);
+      const {uri}=await FS.getUri({path:`backup/${name}`,directory:"CACHE"});
+      prog("開啟分享選單…");
+      try{await PL.Share.share({title:name,files:[uri],dialogTitle:"儲存或分享備份檔"})}catch(e){if(!/cancel/i.test(e.message||""))throw e}
+      done(`備份檔已產生（${mb} MB）。若選了「雲端硬碟」，上傳完成後就會出現在你的雲端硬碟。`);
+    }
+  }catch(e){
+    bkSet("b-status","備份失敗："+(e.message||e)+(target==="local"?"。可改用「分享／存到雲端硬碟」，再選「檔案」或「雲端硬碟」儲存。":""));
+  }finally{bkBusy=false;["b-local","b-share"].forEach(id=>$(id).disabled=false)}
+  function done(t){cfg.lastBackup=localNow();saveCfg();bkSet("b-status",t)}
+}
+$("b-local").onclick=()=>runBackup("local");
+$("b-share").onclick=()=>runBackup("share");
+
+let rZip=null,rMeta=null;
+$("r-file").addEventListener("change",async e=>{
+  const f=e.target.files&&e.target.files[0];rZip=null;rMeta=null;$("r-preview").hidden=true;
+  if(!f)return;
+  bkSet("r-status","讀取備份檔中…");
+  try{
+    rZip=await JSZip.loadAsync(f);
+    const bj=rZip.file("backup.json");if(!bj)throw new Error("這不是會議速記的備份檔（找不到 backup.json）");
+    rMeta=JSON.parse(await bj.async("string"));
+    if(rMeta.format!=="meeting-notes-backup")throw new Error("這不是會議速記的備份檔");
+    const ex=(rMeta.meetings||[]).filter(x=>meetings.some(m=>m.id===x.id)).length;
+    $("r-info").textContent=`備份時間：${dateLabel(rMeta.createdAt)}・${(rMeta.meetings||[]).length} 場會議${rMeta.includesAudio?"（含錄音）":"（不含錄音）"}${rMeta.includesKeys?"・含 API 金鑰":""}。其中 ${ex} 場手機上已經有。`;
+    $("r-preview").hidden=false;bkSet("r-status","");
+  }catch(err){rZip=null;rMeta=null;bkSet("r-status","無法讀取："+(err.message||err))}
+});
+$("r-go").onclick=async()=>{
+  if(!rZip||!rMeta)return;
+  if(R.state!=="idle"){toast("錄音中無法還原，請先結束錄音");return}
+  const mode=$("r-mode").value;$("r-go").disabled=true;
+  let added=0,replaced=0,skipped=0;
+  try{
+    const list=rMeta.meetings||[];
+    for(let n=0;n<list.length;n++){
+      const it=list[n];bkSet("r-status",`還原中…（${n+1}/${list.length}）`);
+      const exists=meetings.find(m=>m.id===it.id);
+      if(exists&&mode==="skip"){skipped++;continue}
+      const mf=rZip.file(`meetings/${it.folder}/meeting.json`);if(!mf){skipped++;continue}
+      const m=JSON.parse(await mf.async("string"));m.status="done";
+      await dbDel("audio",midRange(m.id));await dbDel("chunks",midRange(m.id));
+      m.hasAudio=false;
+      if(it.audio){const af=rZip.file(`meetings/${it.folder}/${it.audio}`);if(af){const b=await af.async("blob");const t=it.audio.endsWith("m4a")?"audio/mp4":it.audio.endsWith("ogg")?"audio/ogg":"audio/webm";await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:t})});m.hasAudio=true;m.mime=t}}
+      if(it.pending){const pj=rZip.file(`meetings/${it.folder}/待轉錄/index.json`);if(pj){for(const c of JSON.parse(await pj.async("string"))){const cf=rZip.file(`meetings/${it.folder}/${c.file}`);if(cf){const b=await cf.async("blob");await dbPut("chunks",{mid:m.id,start:c.start,dur:c.dur,blob:new Blob([b],{type:c.type||"audio/webm"}),tries:0})}}}}
+      await dbPut("meetings",m);
+      const i=meetings.findIndex(x=>x.id===m.id);if(i>=0){meetings[i]=m;replaced++}else{meetings.push(m);added++}
+      if(cur&&cur.id===m.id){cur=m;audioFor=null}
+    }
+    if($("r-settings").checked&&rMeta.settings){
+      const keep={gemKey:cfg.gemKey,groqKey:cfg.groqKey,anthKey:cfg.anthKey,ghToken:cfg.ghToken,lastBackup:cfg.lastBackup};
+      Object.assign(cfg,rMeta.settings);
+      for(const k of ["gemKey","groqKey","anthKey","ghToken"])if(!rMeta.settings[k])cfg[k]=keep[k];
+      cfg.lastBackup=keep.lastBackup;saveCfg();
+      SET.forEach(([id,k])=>{$(id).value=cfg[k]||""});engUI();$("out-lang").value=cfg.out||"zh";
+    }
+    // 分類一律補齊：備份裡有、手機上沒有的分類會加入
+    (rMeta.categories||(rMeta.settings&&rMeta.settings.categories)||[]).forEach(c=>{if(c&&c.id&&!cfg.categories.some(x=>x.id===c.id))cfg.categories.push(c)});saveCfg();
+    if(!cur&&meetings.length)cur=[...meetings].sort((a,b)=>(b.date||"").localeCompare(a.date||""))[0];
+    bkSet("r-status",`還原完成：新增 ${added} 場、覆蓋 ${replaced} 場、略過 ${skipped} 場。`);
+    renderAll();updateStorage();retryAll();
+  }catch(err){bkSet("r-status","還原失敗："+(err.message||err)+`（已完成：新增 ${added}、覆蓋 ${replaced}）`)}
+  finally{$("r-go").disabled=false}
+};
+$("btn-backup").onclick=()=>{showView("backup");renderBackupSummary();closeSide()};
+$("btn-backup-done").onclick=()=>{showView("meeting");renderAll()};
+renderVersion();
+
+// ================= 啟動 =================
+function renderAll(){renderTitle();renderInfo();renderRecUI();renderTranscript();renderMinutes();renderList();loadPlayer();updatePending()}
+async function migrateV1(){
+  const s=lsGet("mtg-notes-v1");if(!s||s.sample||!s.segs||!s.segs.length||lsGet("mtg-v1-migrated"))return;
+  const m={id:uid(),title:s.title||"",date:s.date||localNow(),place:s.place||"",people:s.people||"",segs:s.segs.map(x=>({s:x.t||0,e:x.t||0,text:x.text,key:!!x.key})),minutes:s.minutes||"",duration:s.elapsed||0,mime:"",hasAudio:false,status:"done",createdAt:Date.now(),updatedAt:Date.now()};
+  await dbPut("meetings",m);lsSet("mtg-v1-migrated",true);
+}
+(async()=>{
+  try{db=await openDB()}catch(e){status("無法開啟本機資料庫："+(e.message||e));return}
+  try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+  await migrateV1();
+  meetings=await dbGetAll("meetings");
+  // App 被關閉時正在錄音的會議：保留已存下的錄音
+  for(const m of meetings){if(m.status==="recording"){m.status="done";const parts=await dbGetAll("audio",midRange(m.id));if(!m.duration&&m.segs.length)m.duration=m.segs[m.segs.length-1].e||0;m.hasAudio=parts.length>0;await saveM(m)}}
+  const last=[...meetings].sort((a,b)=>b.updatedAt-a.updatedAt)[0];
+  cur=last||null;
+  renderAll();updateStorage();pump();
+  if(!sttReady()&&!meetings.length){status("第一次使用：請先到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰")}
+  window.addEventListener("online",()=>{retryAll()});
+  if(repoName())setTimeout(()=>checkUpdate(false),2500); // 每次開啟 App 都檢查
+})();
+})();
+</script>
+</body>
+</html>
