@@ -27,12 +27,13 @@ import java.util.concurrent.Executors;
 
 /**
  * 本機語音辨識（離線）：sherpa-onnx ＋ Whisper Small（int8）。
- * 模型不放進 APK，第一次使用時從 Hugging Face 下載到 App 私有目錄（約 375 MB）。
+ * 模型不放進 APK，第一次使用時從本 repo 的 Release 下載到 App 私有目錄（約 375 MB）。
  * 網頁端把錄音片段解碼成 16 kHz 單聲道 16-bit PCM 後傳進來。
  */
 @CapacitorPlugin(name = "LocalAsr")
 public class LocalAsrPlugin extends Plugin {
-    static final String BASE = "https://huggingface.co/csukuangfj/sherpa-onnx-whisper-small/resolve/main/";
+    // 模型放在本 repo 的 Release「local-asr-v1」（網頁端傳入網址）；沒傳時用這個預設值
+    static final String DEFAULT_BASE = "https://github.com/hsueddiese/meeting-notes-app/releases/download/local-asr-v1/";
     static final String[] FILES = {"small-tokens.txt", "small-encoder.int8.onnx", "small-decoder.int8.onnx"};
     static final long NEED_BYTES = 420L * 1024 * 1024;
 
@@ -68,6 +69,8 @@ public class LocalAsrPlugin extends Plugin {
     @PluginMethod
     public void download(PluginCall call) {
         if (downloading) { call.reject("模型正在下載中"); return; }
+        String b = call.getString("base");
+        final String base = (b == null || b.isEmpty()) ? DEFAULT_BASE : (b.endsWith("/") ? b : b + "/");
         downloading = true;
         fetcher.execute(() -> {
             try {
@@ -80,7 +83,7 @@ public class LocalAsrPlugin extends Plugin {
                 for (int i = 0; i < FILES.length; i++) {
                     File out = new File(d, FILES[i]);
                     if (out.isFile() && out.length() > 0) { doneBefore += out.length(); continue; }
-                    fetch(BASE + FILES[i] + "?download=true", out, i, doneBefore);
+                    fetch(base + FILES[i], out, i, doneBefore);
                     doneBefore += out.length();
                 }
                 JSObject r = new JSObject();
@@ -98,7 +101,7 @@ public class LocalAsrPlugin extends Plugin {
     private void fetch(String url, File out, int index, long doneBefore) throws Exception {
         File tmp = new File(out.getPath() + ".part");
         HttpURLConnection c = null;
-        for (int hop = 0; hop < 5; hop++) { // Hugging Face 會轉址到下載伺服器
+        for (int hop = 0; hop < 5; hop++) { // GitHub Release 會轉址到下載伺服器
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setInstanceFollowRedirects(false);
             c.setConnectTimeout(30000);

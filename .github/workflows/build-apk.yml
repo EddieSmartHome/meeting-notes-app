@@ -57,20 +57,12 @@ jobs:
           cp native/android/res/drawable/*.xml android/app/src/main/res/drawable/
           grep -n "permission\|<application\|<service" $M
 
-      # 本機語音辨識：sherpa-onnx 的 Android 函式庫（模型不放進 APK，App 內另外下載）
+      # 本機語音辨識：sherpa-onnx 辨識引擎（含中文掉字修正），由 build-local-asr.yml 預先編好放在 Release「local-asr-v1」
+      # 模型不放進 APK，App 內另外從同一個 Release 下載
       - name: Add sherpa-onnx library
-        env:
-          SHERPA_VER: "1.13.8"
-          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p android/app/libs
-          URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/sherpa-onnx-${SHERPA_VER}.aar"
-          if ! curl -fsSL --retry 3 -o android/app/libs/sherpa-onnx.aar "$URL"; then
-            echo "v${SHERPA_VER} 下載失敗，改用最新版"
-            URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/latest | jq -r '.assets[]|select(.name|test("^sherpa-onnx-[0-9.]+\\.aar$"))|.browser_download_url' | head -1)
-            [ -n "$URL" ] && curl -fsSL --retry 3 -o android/app/libs/sherpa-onnx.aar "$URL"
-          fi
-          echo "sherpa-onnx: $URL"
+          curl -fsSL --retry 3 -o android/app/libs/sherpa-onnx.aar "https://github.com/${{ github.repository }}/releases/download/local-asr-v1/sherpa-onnx.aar"
           ls -lh android/app/libs/sherpa-onnx.aar
           unzip -l android/app/libs/sherpa-onnx.aar | grep -E "\.so$|classes.jar"
           cat >> android/app/build.gradle <<'GRADLE'
