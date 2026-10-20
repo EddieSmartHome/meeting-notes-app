@@ -13,6 +13,7 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest;
 import com.google.android.gms.auth.api.identity.AuthorizationResult;
 import com.google.android.gms.auth.api.identity.Identity;
 import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Scope;
 
 import java.util.Collections;
@@ -41,9 +42,9 @@ public class DriveAuthPlugin extends Plugin {
                                 .getAuthorizationResultFromIntent(res.getData());
                         resolveToken(c, r);
                     } catch (ApiException e) {
-                        c.reject("Google 授權未完成（代碼 " + e.getStatusCode() + "）");
+                        c.reject("Google 授權未完成：" + describe(e) + "（畫面結果 " + res.getResultCode() + (res.getData() == null ? "，沒有回傳資料" : "") + "）");
                     } catch (Exception e) {
-                        c.reject("Google 授權未完成：" + e.getMessage());
+                        c.reject("Google 授權未完成：" + e.getClass().getSimpleName() + "：" + e.getMessage() + "（畫面結果 " + res.getResultCode() + "）");
                     }
                 });
     }
@@ -54,6 +55,19 @@ public class DriveAuthPlugin extends Plugin {
         JSObject o = new JSObject();
         o.put("accessToken", t);
         c.resolve(o);
+    }
+
+    /** 把 Google 的錯誤轉成看得懂的文字：代碼、代碼名稱、Google 附的說明 */
+    static String describe(ApiException e) {
+        int code = e.getStatusCode();
+        String name = CommonStatusCodes.getStatusCodeString(code);
+        String sm = e.getStatus() != null ? e.getStatus().getStatusMessage() : null;
+        String m = e.getMessage();
+        StringBuilder b = new StringBuilder("代碼 ").append(code);
+        if (name != null) b.append(" ").append(name);
+        if (sm != null && !sm.isEmpty()) b.append("，Google 說明：").append(sm);
+        else if (m != null && !m.isEmpty()) b.append("，Google 說明：").append(m);
+        return b.toString();
     }
 
     @PluginMethod
@@ -83,9 +97,8 @@ public class DriveAuthPlugin extends Plugin {
                     }
                 })
                 .addOnFailureListener(e -> {
-                    String msg = e.getMessage();
-                    if (e instanceof ApiException) msg = "代碼 " + ((ApiException) e).getStatusCode() + "：" + msg;
-                    call.reject("Google 授權失敗（" + msg + "）。請確認 Google Cloud 已建立本 App 的 Android OAuth 用戶端");
+                    String msg = e instanceof ApiException ? describe((ApiException) e) : e.getClass().getSimpleName() + "：" + e.getMessage();
+                    call.reject("Google 授權失敗：" + msg + "。請確認 Google Cloud 已建立本 App 的 Android OAuth 用戶端");
                 });
     }
 }
