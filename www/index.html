@@ -1027,11 +1027,12 @@ async function installUpdate(){
   const info=updInfo;if(!info||!info.asset)return;
   const btn=$("upd-install");btn.disabled=true;
   $("upd-meter").hidden=false;$("upd-hint").hidden=true;
-  const path="update/meeting-notes-v"+info.ver+".apk";
+  const path="meeting-notes-update.apk"; // 存在快取最外層：下載元件不會自動建立子資料夾
   let ph=null;
   try{
     updMsg("準備下載…");
-    try{await FS.rmdir({path:"update",directory:"CACHE",recursive:true})}catch(e){}
+    try{await FS.deleteFile({path,directory:"CACHE"})}catch(e){}
+    try{await FS.rmdir({path:"update",directory:"CACHE",recursive:true})}catch(e){} // 清除舊版留下的資料夾
     const dl=info.asset.browser_download_url;
     ph=await FS.addListener("progress",p=>{if(p&&p.contentLength){const pc=Math.min(100,Math.round(p.bytes/p.contentLength*100));$("upd-bar").style.width=pc+"%";updMsg(`下載中… ${pc}%（${(p.bytes/1048576).toFixed(1)} MB）`)}});
     updMsg("下載中…");
