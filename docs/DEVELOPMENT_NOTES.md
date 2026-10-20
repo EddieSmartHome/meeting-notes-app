@@ -49,7 +49,9 @@
   - `meetings`：會議資訊、逐字稿 `segs[{s,e,text,key}]`、會議記錄、長度
   - `audio`：完整錄音的分塊 `[mid, i]`
   - `chunks`：待轉錄片段 `[mid, start]`，轉錄成功後刪除
-- **轉錄佇列**：依序送出。請求用 `fetchT` 加逾時（轉錄 120 秒、會議記錄 300 秒）。網路錯誤（`e.net`）與 429／5xx（`e.transient`）不計失敗次數，以 2、4、8… 秒最長 60 秒的間隔持續重試（v2.0.5 起，因實機常在網路切換、螢幕關閉時失敗）；其他錯誤最多 3 次後標為失敗。等待可被打斷：恢復連線、回到 App 畫面、按「重試」都會立刻再送
+- **轉錄佇列**：依序送出。請求用 `fetchT` 加逾時（轉錄 120 秒、會議記錄 300 秒）。網路錯誤（`e.net`）與 429／5xx（`e.transient`）不計失敗次數，以 2、4、8… 秒最長 60 秒的間隔持續重試（v2.0.5 起，因實機常在網路切換、螢幕關閉時失敗）；其他錯誤最多 3 次後標為失敗。等待可被打斷：恢復連線、回到 App 畫面、按「重試」都會立刻再送。v2.0.6 起：整段轉錄另有 180 秒上限（`Promise.race`，防止卡在 fetch 以外的步驟）；每 30 秒檢查佇列沒在跑就重啟；畫面顯示這段已等秒數（`qStart`）
+- **Gemini 思考程度（v2.0.6）**：轉錄請求帶 `generationConfig.thinkingConfig.thinkingLevel`，設定 `cfg.gemThink` 預設 "low"（"medium" 時不送，用模型預設）；模型回 400 且訊息含 think 時，記住該模型並改為不送再重試。會議記錄不套用。依 Google 文件，Gemini 3.8 Flash 預設 medium、不支援 minimal
+- **備用模型（v2.0.6）**：轉錄時主模型回 5xx，該段立刻改用 `gemini-3.5-flash-lite`；備用模型回 404 則本次執行期間不再使用
 - **Gemini 轉錄**：`generateContent`，音訊以 inline base64 送出，要求結構化 JSON `{segments:[{start,end,text}]}`；時間為片段內相對秒數，再加上片段起點
 - **Groq 轉錄**：`/audio/transcriptions`，`verbose_json`，依 `no_speech_prob` 過濾
 - **後處理**：OpenCC 簡轉台灣繁體、過濾常見幻覺字句、合併過短片段
