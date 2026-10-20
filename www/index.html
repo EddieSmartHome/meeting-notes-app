@@ -74,6 +74,14 @@ button:disabled{opacity:.45;cursor:not-allowed}
 /* ---- 會議清單 ---- */
 .side-head{display:flex;align-items:center;gap:8px}
 .side-head strong{flex:1;font-size:1rem}
+.cdrop-bar{display:flex;flex-wrap:wrap;gap:6px;padding:8px;border:1px dashed var(--accent);border-radius:10px;background:var(--surface)}
+.cdrop-bar .hint{width:100%;font-size:.78rem;color:var(--muted)}
+.cdrop{border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:.85rem;background:var(--bg);user-select:none}
+.cdrop.cur{opacity:.5}
+.cdrop.over{background:var(--accent);color:#fff;border-color:var(--accent)}
+.mitem{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.mitem.dragging{opacity:.4}
+.drag-ghost{position:fixed;z-index:1000;pointer-events:none;max-width:70vw;padding:6px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--accent);box-shadow:0 6px 18px rgba(0,0,0,.25);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transform:translate(-50%,-130%)}
 .mlist{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin:0 -6px;padding:0 6px}
 .mitem{display:block;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:8px 10px;font-weight:400}
 .mitem:hover{background:var(--surface);border-color:var(--line)}
@@ -174,6 +182,7 @@ audio{width:100%;height:40px}
     <button class="btn-primary" id="btn-new">＋ 新會議</button>
     <input id="search" type="search" placeholder="搜尋會議名稱、與會者、內容">
     <div class="side-filter"><label class="label" for="cat-filter" hidden>分類篩選</label><select id="cat-filter" aria-label="分類篩選"></select></div>
+    <div class="cdrop-bar" id="cdrop" hidden aria-hidden="true"></div>
     <nav class="mlist" id="mlist"></nav>
     <div class="side-foot">
       <button class="btn-ghost" id="btn-backup" style="text-align:left">⤓ 備份與還原</button>
@@ -325,6 +334,16 @@ audio{width:100%;height:40px}
             <details class="note full" id="gtx-debug" hidden><summary>最近一次 Gemini Transcribe 沒有回傳文字的紀錄</summary><pre id="gtx-debug-text" style="white-space:pre-wrap;word-break:break-all;font-size:.75rem"></pre></details>
             <p class="note full" data-eng="gtx">轉錄使用 Google 的語音轉錄專用模型 gemini-3.5-transcribe（預覽版）。它忙碌時，該段改用上方的備用模型轉錄；主模型用於產生會議記錄。每段錄音（約 10–25 秒）的時間點依字數平均估算，點逐字稿時位置可能差幾秒。</p>
             <div class="field full headrow" data-eng="gemini gtx"><span class="note" id="gem-models-note" style="flex:1;min-width:0"></span><button class="btn-ghost" id="gem-models-refresh">更新模型清單</button></div>
+            <div class="field full help" data-eng="groq">
+              <strong>如何取得 Groq API 金鑰（免費，約 3 分鐘）</strong>
+              <ol>
+                <li>用瀏覽器開啟 <a href="https://console.groq.com" target="_blank" rel="noopener">console.groq.com</a>，按「Sign up」註冊（建議用 Email 註冊；用 Google 帳號登入有時會出現 signup_blocked）</li>
+                <li>到信箱收驗證信，點連結完成註冊並登入</li>
+                <li>開啟 <a href="https://console.groq.com/keys" target="_blank" rel="noopener">console.groq.com/keys</a>，按「Create API Key」，名稱可填「會議速記」</li>
+                <li>金鑰只會顯示一次，立刻複製整串金鑰，貼到下方欄位</li>
+              </ol>
+              <span class="note">免費方案每天約可轉錄 8 小時錄音（每分鐘 20 次、每天 2,000 次請求），一般會議用不完，實際額度以 Groq 帳號的 Limits 頁面為準。免費方案不需綁信用卡；按鈕名稱若因改版而不同，找「API Keys」相關選項即可。金鑰請勿分享給他人。</span>
+            </div>
             <div class="field full" data-eng="groq"><label class="label" for="s-groq">Groq API 金鑰</label><input id="s-groq" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
             <div class="field" data-eng="groq"><label class="label" for="s-stt">Whisper 模型</label>
               <select id="s-stt">
@@ -538,11 +557,61 @@ function renderList(){
     if(m.status==="recording"&&R.mid===m.id){const bg=document.createElement("span");bg.className="badge rec";bg.textContent="錄音中";d.appendChild(bg)}
     const pc=pendingCount[m.id]||0;if(pc){const bg=document.createElement("span");bg.className="badge pend";bg.textContent=`待轉錄 ${pc}`;d.appendChild(bg)}
     b.append(t,d);
-    b.onclick=()=>{openMeeting(m.id);closeSide()};
+    b.onclick=()=>{if(dragJustEnded)return;openMeeting(m.id);closeSide()};
+    attachDrag(b,m);
     box.appendChild(b);
   });
 }
 $("search").addEventListener("input",renderList);
+// ================= 長按會議拖曳到分類 =================
+let dragJustEnded=false;
+function attachDrag(el,m){
+  let timer=null,sx=0,sy=0,active=false,ghost=null,over=null;
+  const bar=$("cdrop");
+  const showBar=()=>{
+    bar.textContent="";
+    const h=document.createElement("div");h.className="hint";h.textContent=cfg.categories.length?"拖到要放的分類上放開：":"拖到「未分類」，或先到設定新增分類";bar.appendChild(h);
+    [["","未分類"],...cfg.categories.map(c=>[c.id,c.name||"未命名分類"])].forEach(([id,name])=>{
+      const d=document.createElement("div");d.className="cdrop"+((m.cat||"")===id&&(!id||catOf(m))?" cur":"");d.dataset.cat=id;d.textContent=name;bar.appendChild(d)});
+    bar.hidden=false;
+  };
+  const start=(x,y)=>{
+    active=true;el.classList.add("dragging");showBar();
+    ghost=document.createElement("div");ghost.className="drag-ghost";ghost.textContent=m.title||"未命名會議";document.body.appendChild(ghost);
+    move(x,y);try{navigator.vibrate&&navigator.vibrate(25)}catch(e){}
+  };
+  const move=(x,y)=>{
+    if(!active)return;ghost.style.left=x+"px";ghost.style.top=y+"px";
+    const t=document.elementFromPoint(x,y);const d=t&&t.closest?t.closest(".cdrop"):null;
+    if(over&&over!==d)over.classList.remove("over");over=d;if(d)d.classList.add("over");
+  };
+  const end=async()=>{
+    clearTimeout(timer);timer=null;
+    if(!active)return;
+    active=false;el.classList.remove("dragging");if(ghost){ghost.remove();ghost=null}
+    const target=over;over=null;bar.hidden=true;
+    dragJustEnded=true;setTimeout(()=>{dragJustEnded=false},400);
+    if(!target)return;
+    const id=target.dataset.cat||"";
+    if((m.cat||"")===id)return;
+    m.cat=id;await saveM(m);renderList();if(cur&&cur.id===m.id)renderInfo();
+    toast(`已將「${m.title||"未命名會議"}」移到「${target.textContent}」`);
+  };
+  const cancelIfMoved=(x,y)=>{if(timer&&(Math.abs(x-sx)>8||Math.abs(y-sy)>8)){clearTimeout(timer);timer=null}};
+  // 觸控：長按約半秒開始拖曳；拖曳開始前的滑動照常捲動清單
+  el.addEventListener("touchstart",e=>{if(e.touches.length!==1)return;const t=e.touches[0];sx=t.clientX;sy=t.clientY;timer=setTimeout(()=>{timer=null;start(sx,sy)},500)},{passive:true});
+  el.addEventListener("touchmove",e=>{const t=e.touches[0];if(active){e.preventDefault();move(t.clientX,t.clientY)}else cancelIfMoved(t.clientX,t.clientY)},{passive:false});
+  el.addEventListener("touchend",e=>{if(active)e.preventDefault();end()});
+  el.addEventListener("touchcancel",()=>{over=null;end()});
+  el.addEventListener("contextmenu",e=>e.preventDefault());
+  // 滑鼠（電腦或平板接滑鼠）：按住半秒開始拖曳
+  el.addEventListener("mousedown",e=>{if(e.button!==0)return;sx=e.clientX;sy=e.clientY;timer=setTimeout(()=>{timer=null;start(sx,sy);
+    const mm=ev=>move(ev.clientX,ev.clientY),mu=()=>{document.removeEventListener("mousemove",mm);document.removeEventListener("mouseup",mu);end()};
+    document.addEventListener("mousemove",mm);document.addEventListener("mouseup",mu)},500)});
+  el.addEventListener("mousemove",e=>cancelIfMoved(e.clientX,e.clientY));
+  el.addEventListener("mouseup",()=>{if(!active){clearTimeout(timer);timer=null}});
+  el.addEventListener("mouseleave",()=>{if(!active){clearTimeout(timer);timer=null}});
+}
 function renderCatSelects(){
   const opts=cfg.categories.map(c=>[c.id,c.name||"未命名分類"]);
   const f=$("cat-filter");f.textContent="";
