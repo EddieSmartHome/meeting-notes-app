@@ -404,6 +404,15 @@ audio{width:100%;height:40px}
 const $=id=>document.getElementById(id);
 const p2=n=>String(n).padStart(2,"0");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// 有逾時的 fetch；連線失敗或逾時丟出 net=true 的錯誤（屬暫時性問題，佇列會持續重試）
+function netErr(e,ms){const d=(e&&e.name==="AbortError")||e==="timeout"?`超過 ${Math.round(ms/1000)} 秒沒有回應`:((e&&e.message)||String(e||"")).slice(0,120);const er=new Error("網路連線不穩（"+d+"）");er.net=true;return er}
+async function fetchT(url,opts,ms){
+  const ac=window.AbortController?new AbortController():null;let t;
+  const timeout=new Promise((_,rej)=>{t=setTimeout(()=>{try{ac&&ac.abort()}catch(e){}rej("timeout")},ms)});
+  try{return await Promise.race([fetch(url,Object.assign({},opts,ac?{signal:ac.signal}:{})),timeout])}
+  catch(e){throw netErr(e,ms)}
+  finally{clearTimeout(t)}
+}
 const CAP=window.Capacitor;
 const NATIVE=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
 const PL=(CAP&&CAP.Plugins)||{};
@@ -749,13 +758,16 @@ async function updatePending(){
   if(n){
     const failed=all.filter(c=>cur&&c.mid===cur.id&&c.tries>=3).length;
     const sp=document.createElement("span");
-    sp.textContent=!sttReady()?`${n} 段錄音等待轉錄（請先到設定填入 ${sttName()} 金鑰）`:failed?`${n} 段尚未轉錄，其中 ${failed} 段失敗：${qErr||"請檢查網路"}`:`轉錄中，還有 ${n} 段…`;
+    sp.textContent=!sttReady()?`${n} 段錄音等待轉錄（請先到設定填入 ${sttName()} 金鑰）`:failed?`${n} 段尚未轉錄，其中 ${failed} 段失敗：${qErr||"請檢查網路"}`:qErr?`還有 ${n} 段等待轉錄：${qErr}`:`轉錄中，還有 ${n} 段…`;
     el.appendChild(sp);
-    if(failed||!qBusy){const b=document.createElement("button");b.className="btn-ghost";b.textContent="重試";b.onclick=retryAll;el.appendChild(b)}
+    if(failed||!qBusy||qErr){const b=document.createElement("button");b.className="btn-ghost";b.textContent="重試";b.onclick=retryAll;el.appendChild(b)}
   }
   el.hidden=!n;renderList();
 }
-async function retryAll(){const all=await dbGetAll("chunks");for(const c of all){if(c.tries>=3){c.tries=0;await dbPut("chunks",c)}}qErr="";updatePending();pump()}
+// 佇列等待可被打斷：網路恢復、回到 App、按「重試」時立刻再送
+let qWake=null,qNetFails=0;
+function qSleep(ms){return new Promise(r=>{const t=setTimeout(()=>{qWake=null;r()},ms);qWake=()=>{clearTimeout(t);qWake=null;r()}})}
+async function retryAll(){const all=await dbGetAll("chunks");for(const c of all){if(c.tries>=3){c.tries=0;await dbPut("chunks",c)}}qErr="";qNetFails=0;updatePending();if(qWake)qWake();pump()}
 async function pump(){
   if(qBusy||!sttReady())return;qBusy=true;
   try{
@@ -765,12 +777,18 @@ async function pump(){
       try{
         const segs=await transcribe(c);
         await addSegs(c.mid,segs);
-        await dbDel("chunks",[c.mid,c.start]);qErr="";
+        await dbDel("chunks",[c.mid,c.start]);qErr="";qNetFails=0;
       }catch(e){
-        qErr=e.message||String(e);
+        qErr=(e.message||String(e))+(e.net?"，會自動重試":"");
         if(e.fatal){status(qErr);break}
+        if(e.net||e.transient){
+          // 網路不穩、額度暫時用完、服務忙碌：不算失敗次數，間隔逐步拉長（最長 1 分鐘）持續重試
+          qNetFails++;await updatePending();
+          await qSleep(e.wait||Math.min(60000,2000*Math.pow(2,qNetFails-1)));
+          continue;
+        }
         c.tries++;await dbPut("chunks",c);
-        await sleep(e.wait||1500*c.tries);
+        await qSleep(1500*c.tries);
       }
       await updatePending();
     }
@@ -784,16 +802,16 @@ function gemErr(r,data,what){
   if(r.status===400&&/API key/i.test(msg)){er=new Error("Gemini 金鑰無效，請到設定重新填入");er.fatal=true}
   else if(r.status===403){er=new Error("Gemini 金鑰沒有權限："+msg);er.fatal=true}
   else if(r.status===404){er=new Error("找不到 Gemini 模型「"+cfg.gemModel+"」，請到設定修改模型名稱");er.fatal=true}
-  else if(r.status===429){er=new Error("Gemini 免費額度暫時用完，稍後自動重試");er.wait=30000}
+  else if(r.status===429){er=new Error("Gemini 免費額度暫時用完，稍後自動重試");er.wait=30000;er.transient=true}
+  else if(r.status>=500){er=new Error(`Gemini 服務暫時忙碌（HTTP ${r.status}），稍後自動重試`);er.wait=15000;er.transient=true}
   else er=new Error(what+"失敗："+msg);
   return er;
 }
-async function gemini(parts,schema){
+async function gemini(parts,schema,ms){
   const body={contents:[{role:"user",parts}],generationConfig:{temperature:0}};
   if(schema){body.generationConfig.response_mime_type="application/json";body.generationConfig.response_schema=schema}
   let r;
-  try{r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.gemModel||"gemini-3.8-flash")}:generateContent`,{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":cfg.gemKey},body:JSON.stringify(body)})}
-  catch(e){throw new Error("網路連線失敗，恢復後會自動重試")}
+  r=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.gemModel||"gemini-3.8-flash")}:generateContent`,{method:"POST",headers:{"content-type":"application/json","x-goog-api-key":cfg.gemKey},body:JSON.stringify(body)},ms||120000);
   const data=await r.json().catch(()=>({}));
   return {r,data,text:(((data.candidates||[])[0]||{}).content||{parts:[]}).parts.filter(p=>!p.thought&&p.text).map(p=>p.text).join("")};
 }
@@ -827,14 +845,14 @@ async function transcribeGroq(c){
   fd.append("file",new File([c.blob],"chunk."+ext,{type:c.blob.type||"audio/webm"}));
   fd.append("model",cfg.stt);fd.append("response_format","verbose_json");fd.append("temperature","0");fd.append("prompt",prompt);
   let r;
-  try{r=await fetch("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{"Authorization":"Bearer "+cfg.groqKey},body:fd})}
-  catch(e){const er=new Error("網路連線失敗，恢復後會自動補轉錄");throw er}
+  r=await fetchT("https://api.groq.com/openai/v1/audio/transcriptions",{method:"POST",headers:{"Authorization":"Bearer "+cfg.groqKey},body:fd},120000);
   const data=await r.json().catch(()=>({}));
   if(!r.ok){
     const msg=(data.error&&data.error.message)||("HTTP "+r.status);
     const er=new Error(r.status===401?"Groq 金鑰無效，請到設定重新填入":r.status===429?"Groq 用量達上限，稍後自動重試":"轉錄失敗："+msg);
     if(r.status===401){er.fatal=true}
-    if(r.status===429){er.wait=20000}
+    if(r.status===429){er.wait=20000;er.transient=true}
+    if(r.status>=500){er.message=`Groq 服務暫時忙碌（HTTP ${r.status}），稍後自動重試`;er.wait=15000;er.transient=true}
     throw er;
   }
   let segs=(data.segments||[]).filter(s=>!(s.no_speech_prob>0.6&&s.avg_logprob<-0.8)).map(s=>({s:c.start+(s.start||0),e:c.start+Math.min(s.end||c.dur,c.dur),text:toTW((s.text||"").trim())}));
@@ -910,7 +928,7 @@ async function generate(m){
   if(cur===m)$("minutes").innerHTML='<p class="note">正在整理會議記錄，長會議約需 20–60 秒…</p>';
   try{
     if(cfg.minEngine!=="claude"){
-      const {r,data,text}=await gemini([{text:buildPrompt(m)}]);
+      const {r,data,text}=await gemini([{text:buildPrompt(m)}],null,300000);
       if(!r.ok)throw gemErr(r,data,"產生");
       if(!text)throw new Error("Gemini 沒有回傳內容，請再試一次");
       m.minutes=text;await saveM(m);return;
@@ -1292,6 +1310,7 @@ async function migrateV1(){
   renderAll();updateStorage();pump();
   if(!sttReady()&&!meetings.length){status("第一次使用：請先到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰")}
   window.addEventListener("online",()=>{retryAll()});
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")retryAll()});
   if(repoName())setTimeout(()=>checkUpdate(false),2500); // 每次開啟 App 都檢查
 })();
 })();

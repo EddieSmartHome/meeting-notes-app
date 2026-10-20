@@ -49,7 +49,7 @@
   - `meetings`：會議資訊、逐字稿 `segs[{s,e,text,key}]`、會議記錄、長度
   - `audio`：完整錄音的分塊 `[mid, i]`
   - `chunks`：待轉錄片段 `[mid, start]`，轉錄成功後刪除
-- **轉錄佇列**：依序送出；失敗最多重試 3 次；429 等待後重試；恢復連線時自動重試
+- **轉錄佇列**：依序送出。請求用 `fetchT` 加逾時（轉錄 120 秒、會議記錄 300 秒）。網路錯誤（`e.net`）與 429／5xx（`e.transient`）不計失敗次數，以 2、4、8… 秒最長 60 秒的間隔持續重試（v2.0.5 起，因實機常在網路切換、螢幕關閉時失敗）；其他錯誤最多 3 次後標為失敗。等待可被打斷：恢復連線、回到 App 畫面、按「重試」都會立刻再送
 - **Gemini 轉錄**：`generateContent`，音訊以 inline base64 送出，要求結構化 JSON `{segments:[{start,end,text}]}`；時間為片段內相對秒數，再加上片段起點
 - **Groq 轉錄**：`/audio/transcriptions`，`verbose_json`，依 `no_speech_prob` 過濾
 - **後處理**：OpenCC 簡轉台灣繁體、過濾常見幻覺字句、合併過短片段
