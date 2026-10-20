@@ -1013,6 +1013,8 @@ engUI();
 
 // ================= Gemini 模型清單（從 Google 線上清單同步）=================
 const GEM_SKIP=/tts|image|embed|live|audio|robotics|computer-use|aqa|veo|imagen|learnlm|gemma|nano/i;
+// 只列免費方案可用的：依 Google 價格頁，免費的是 Flash 與 Flash-Lite 系列；Pro、Omni 等不免費（模型清單 API 沒有標示，只能依名稱判斷）
+const gemFree=id=>/flash/i.test(id)&&!/pro|omni/i.test(id)&&!GEM_SKIP.test(id);
 function gemVer(id){const m=id.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0}
 function gemRank(id){return gemVer(id)*100-(/preview|exp/i.test(id)?50:0)-(/\d{2,}$/.test(id)?1:0)}
 async function fetchGemModels(){
@@ -1026,23 +1028,23 @@ async function fetchGemModels(){
   }
   return list.filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent"))
     .map(m=>({id:String(m.name||"").replace(/^models\//,""),name:m.displayName||""}))
-    .filter(m=>/^gemini-/.test(m.id)&&!GEM_SKIP.test(m.id))
+    .filter(m=>/^gemini-/.test(m.id)&&gemFree(m.id))
     .sort((a,b)=>gemRank(b.id)-gemRank(a.id)||a.id.localeCompare(b.id));
 }
 // 推薦：最新的正式版 Flash（主模型）與 Flash-Lite（備用）
 function gemPick(list,lite){const c=list.filter(m=>/flash/i.test(m.id)&&(lite?/lite/i.test(m.id):!/lite/i.test(m.id)));return (c.find(m=>!/preview|exp/i.test(m.id))||c[0]||{}).id||""}
 function renderGemModels(){
-  const list=cfg.gemModels||[],ids=list.map(m=>m.id);
+  const list=(cfg.gemModels||[]).filter(m=>gemFree(m.id)),ids=list.map(m=>m.id);
   [["s-gemModel","gemModel",false],["s-gemFallback","gemFallback",true]].forEach(([id,k,fb])=>{
     const sel=$(id);sel.textContent="";
     if(fb)sel.add(new Option("不使用備用模型",""));
     list.forEach(m=>sel.add(new Option(m.name&&m.name!==m.id?`${m.name}（${m.id}）`:m.id,m.id)));
     const v=cfg[k]||"";
-    if(v&&!ids.includes(v))sel.add(new Option(list.length?`${v}（已不在清單中）`:v,v));
+    if(v&&!ids.includes(v))sel.add(new Option(list.length?`${v}（不在免費清單中）`:v,v));
     sel.value=v;
   });
   const at=cfg.gemModelsAt?new Date(cfg.gemModelsAt):null;
-  $("gem-models-note").textContent=!cfg.gemKey?"填入金鑰後會自動載入 Google 目前提供的模型清單。":list.length?`清單來自 Google，共 ${list.length} 個模型・${at?`${at.getMonth()+1}/${at.getDate()} ${p2(at.getHours())}:${p2(at.getMinutes())} 更新`:""}`:"尚未載入模型清單。";
+  $("gem-models-note").textContent=!cfg.gemKey?"填入金鑰後會自動載入 Google 目前提供的模型清單。":list.length?`只列免費方案可用的模型，清單來自 Google，共 ${list.length} 個・${at?`${at.getMonth()+1}/${at.getDate()} ${p2(at.getHours())}:${p2(at.getMinutes())} 更新`:""}`:"尚未載入模型清單。";
 }
 async function syncGemModels(manual){
   if(!cfg.gemKey){if(manual)toast("請先填入 Gemini API 金鑰");renderGemModels();return}
@@ -1052,8 +1054,8 @@ async function syncGemModels(manual){
     cfg.gemModels=list;cfg.gemModelsAt=Date.now();
     const ids=list.map(m=>m.id),msgs=[];
     // 目前選的模型已下架：自動換成推薦模型
-    if(!ids.includes(cfg.gemModel)){const n=gemPick(list,false)||ids[0];if(cfg.gemModel)msgs.push(`主模型 ${cfg.gemModel} 已下架，改用 ${n}`);cfg.gemModel=n}
-    if(cfg.gemFallback&&!ids.includes(cfg.gemFallback)){const n=gemPick(list,true);msgs.push(`備用模型 ${cfg.gemFallback} 已下架，改用 ${n||"不使用"}`);cfg.gemFallback=n}
+    if(!ids.includes(cfg.gemModel)){const n=gemPick(list,false)||ids[0];if(cfg.gemModel)msgs.push(`主模型 ${cfg.gemModel} 已下架或不在免費方案，改用 ${n}`);cfg.gemModel=n}
+    if(cfg.gemFallback&&!ids.includes(cfg.gemFallback)){const n=gemPick(list,true);msgs.push(`備用模型 ${cfg.gemFallback} 已下架或不在免費方案，改用 ${n||"不使用"}`);cfg.gemFallback=n}
     saveCfg();if(msgs.length){toast(msgs.join("；"));retryAll()}else if(manual)toast("模型清單已更新");
   }catch(e){if(manual)toast("無法取得模型清單："+(e.message||e))}
   finally{btn.disabled=false;renderGemModels()}
