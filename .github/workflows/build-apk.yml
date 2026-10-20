@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - "README.md"
       - "docs/**"
+  # 手動執行：GitHub 網頁 → Actions → Build APK → Run workflow
+  # （強制推送整段新歷史時不會自動觸發，需手動執行或再推一個提交）
   workflow_dispatch: {}
 
 permissions:
