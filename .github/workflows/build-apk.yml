@@ -158,10 +158,12 @@ jobs:
           APK=android/app/build/outputs/apk/debug/app-debug.apk
           # 固定金鑰的憑證指紋（公開資訊，不是金鑰本身）
           EXPECTED="22:03:74:5A:13:BC:CD:03:07:D9:36:1B:27:D3:FD:66:26:B3:61:62:B4:45:93:9B:80:41:4F:07:5D:2B:0F:E3"
-          ACTUAL=$(keytool -printcert -jarfile "$APK" | grep -m1 "SHA256:" | awk '{print $2}')
+          # minSdk 24 起 APK 只有 v2/v3 簽章，keytool 讀不到，改用 apksigner
+          APKSIGNER=$(ls -d $ANDROID_HOME/build-tools/*/apksigner | sort -V | tail -1)
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" | grep -m1 "certificate SHA-256 digest" | awk '{print $NF}' | tr 'a-f' 'A-F' | sed 's/../&:/g;s/:$//')
           echo "expected: $EXPECTED"
           echo "actual:   $ACTUAL"
-          [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ]
+          if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then echo "::error title=Signature mismatch::$ACTUAL"; exit 1; fi
 
       - name: Rename APK
         run: cp android/app/build/outputs/apk/debug/app-debug.apk meeting-notes-v${{ env.APP_VERSION }}.apk
