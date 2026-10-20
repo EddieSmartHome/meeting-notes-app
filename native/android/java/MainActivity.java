@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RecordingServicePlugin.class);
+        registerPlugin(LocalAsrPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

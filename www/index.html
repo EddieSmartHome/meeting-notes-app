@@ -308,6 +308,21 @@ audio{width:100%;height:40px}
           <p class="note">錄音每 10–25 秒依停頓切段送出轉錄，逐字稿約延遲 10–20 秒出現。沒有網路或超過免費額度時，錄音照常保存，之後自動補轉錄。</p>
           <p class="note" data-eng="gemini gtx">Gemini 免費方案的內容可能被 Google 用來改進模型，機密會議請留意。各模型的免費額度可在 aistudio.google.com/rate-limit 查看。</p>
         </section>
+        <section class="panel" id="local-panel" hidden>
+          <h2>本機辨識（離線）</h2>
+          <div class="grid">
+            <div class="field full"><label class="label" for="s-localMode">使用方式</label>
+              <select id="s-localMode">
+                <option value="off">不使用</option>
+                <option value="fallback">雲端連不上、忙碌或額度用完時改用本機</option>
+                <option value="always">一律使用本機（錄音不會上傳）</option>
+              </select></div>
+          </div>
+          <p class="note" id="local-status"></p>
+          <div class="meter" id="local-bar" hidden><i id="local-fill"></i></div>
+          <div class="headrow" style="margin-top:8px"><button class="btn-primary" id="local-dl">下載模型（約 375 MB）</button><button class="btn-ghost" id="local-rm" hidden>刪除模型</button></div>
+          <p class="note">使用 OpenAI 的 Whisper Small 模型（int8 版本，由 sherpa-onnx 作者提供，從 Hugging Face 下載），在手機上離線辨識。速度依手機效能而定，通常比雲端慢；準確度一般也比 Gemini 低，但不需網路、不受免費額度限制。建議用 Wi-Fi 下載。第一次辨識需要幾秒載入模型。</p>
+        </section>
         <section class="panel">
           <h2>會議記錄</h2>
           <div class="grid">
@@ -430,10 +445,13 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0,localMode:"off"},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
-const sttReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
+const cloudReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
+const LA=PL.LocalAsr;const localSt={ready:false,downloading:false};
+const localOn=()=>!!LA&&cfg.localMode!=="off"&&localSt.ready;
+const sttReady=()=>cloudReady()||localOn();
 delete cfg.ghToken;delete cfg.ghRepo; // v2.0.1 起不再使用
 const minReady=()=>!!(cfg.minEngine==="claude"?cfg.anthKey:cfg.gemKey);
 if(!Array.isArray(cfg.categories))cfg.categories=[];
@@ -792,6 +810,10 @@ async function pump(){
       }catch(e){
         qErr=(e.message||String(e))+(e.net?"，會自動重試":"");
         if(e.fatal){status(qErr);break}
+        if((e.net||e.transient)&&cfg.localMode==="fallback"&&localOn()&&cloudReady()){
+          // 雲端連不上或忙碌：這段改用本機辨識，不必等
+          try{const ls=await transcribeLocal(c);await addSegs(c.mid,ls);await dbDel("chunks",[c.mid,c.start]);qErr="";await updatePending();continue}catch(le){}
+        }
         if(e.net||e.transient){
           // 網路不穩、額度暫時用完、服務忙碌：不算失敗次數，間隔逐步拉長（最長 1 分鐘）持續重試
           qNetFails++;await updatePending();
@@ -832,7 +854,34 @@ async function gemini(parts,schema,ms,opt){
 }
 const noFallback={};
 const SEG_SCHEMA={type:"OBJECT",properties:{segments:{type:"ARRAY",items:{type:"OBJECT",properties:{start:{type:"NUMBER"},end:{type:"NUMBER"},text:{type:"STRING"}},required:["start","end","text"]}}},required:["segments"]};
-async function transcribe(c){return cfg.sttEngine==="groq"?transcribeGroq(c):cfg.sttEngine==="gtx"?transcribeGtx(c):transcribeGemini(c)}
+async function transcribe(c){
+  if(localOn()&&(cfg.localMode==="always"||!cloudReady()))return transcribeLocal(c);
+  return cfg.sttEngine==="groq"?transcribeGroq(c):cfg.sttEngine==="gtx"?transcribeGtx(c):transcribeGemini(c)}
+// 沒有逐句時間點時：依句尾標點分句，時間依字數平均分配到這段錄音
+function timedSplit(c,text){
+  const sents=(text.match(/[^。！？!?；;]+[。！？!?；;]*/g)||[text]).map(x=>x.trim()).filter(Boolean);
+  const total=sents.reduce((a,x)=>a+x.length,0)||1;let acc=0;
+  return sents.map(x=>{const st=c.dur*acc/total;acc+=x.length;return{s:c.start+st,e:c.start+c.dur*acc/total,text:x}}).filter(x=>!HALLU.some(re=>re.test(x.text)));
+}
+// 本機辨識：片段解碼成 16 kHz 單聲道 16-bit PCM，交給原生的 Whisper Small
+async function transcribeLocal(c){
+  let pcm;
+  try{
+    const ab=await c.blob.arrayBuffer();
+    const ctx=new (window.AudioContext||window.webkitAudioContext)();
+    const buf=await ctx.decodeAudioData(ab);try{ctx.close()}catch(e){}
+    const sr=16000,off=new OfflineAudioContext(1,Math.max(1,Math.ceil(buf.duration*sr)),sr);
+    const src=off.createBufferSource();src.buffer=buf;src.connect(off.destination);src.start();
+    const f=(await off.startRendering()).getChannelData(0);
+    const i16=new Int16Array(f.length);for(let i=0;i<f.length;i++){const x=Math.max(-1,Math.min(1,f[i]));i16[i]=x<0?x*0x8000:x*0x7fff}
+    pcm=await blobB64(new Blob([i16.buffer]));
+  }catch(e){throw new Error("本機辨識無法解碼這段錄音："+(e.message||e))}
+  let r;
+  try{r=await LA.transcribe({pcm,sampleRate:16000})}catch(e){throw new Error(e.message||String(e))}
+  const text=toTW(String(r.text||"").replace(/\s+/g," ").trim());
+  if(!text||HALLU.some(re=>re.test(text)))return [];
+  return timedSplit(c,text);
+}
 // Gemini Transcribe（語音轉錄專用模型，走 interactions 接口）
 const GTX_MODEL="gemini-3.5-transcribe";
 function gtxText(d){
@@ -864,10 +913,7 @@ async function transcribeGtx(c){
   }
   const text=toTW(gtxText(data).replace(/\s+/g," ").trim());
   if(!text||HALLU.some(re=>re.test(text)))return [];
-  // 依句尾標點分句，時間點依字數平均分配到這段錄音
-  const sents=(text.match(/[^。！？!?；;]+[。！？!?；;]*/g)||[text]).map(x=>x.trim()).filter(Boolean);
-  const total=sents.reduce((a,x)=>a+x.length,0)||1;let acc=0;
-  return sents.map(x=>{const st=c.dur*acc/total;acc+=x.length;return{s:c.start+st,e:c.start+c.dur*acc/total,text:x}}).filter(x=>!HALLU.some(re=>re.test(x.text)));
+  return timedSplit(c,text);
 }
 async function transcribeGemini(c,onlyModel){
   const m=meetings.find(x=>x.id===c.mid);
@@ -1039,7 +1085,7 @@ $("btn-share").onclick=async()=>{const m=curM();
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
-$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();renderGemModels();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
+$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();renderGemModels();refreshLocal();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
 const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
@@ -1105,6 +1151,30 @@ $("s-gemKey").addEventListener("change",()=>{if(cfg.gemKey)syncGemModels(false)}
 renderGemModels();
 // 開啟 App 時，清單超過 1 天就重新同步
 if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>86400000)setTimeout(()=>syncGemModels(false),3000);
+// ================= 本機辨識設定 =================
+function renderLocal(){
+  if(!LA)return;
+  $("local-panel").hidden=false;$("s-localMode").value=cfg.localMode||"off";
+  $("local-dl").hidden=localSt.ready;$("local-dl").disabled=localSt.downloading;$("local-rm").hidden=!localSt.ready||localSt.downloading;
+  $("local-bar").hidden=!localSt.downloading;
+  $("local-status").textContent=localSt.downloading?"模型下載中…":localSt.ready?`模型已下載（${Math.round((localSt.bytes||0)/1048576)} MB）`:"尚未下載模型。選擇使用方式前，請先下載模型。";
+}
+async function refreshLocal(){if(!LA)return;try{Object.assign(localSt,await LA.status())}catch(e){}renderLocal()}
+if(LA){
+  try{LA.addListener("progress",p=>{const all=389*1048576;const got=(p.doneBefore||0)+(p.received||0);
+    $("local-fill").style.width=Math.min(100,got/all*100)+"%";$("local-status").textContent=`模型下載中…（第 ${p.index+1}/${p.count} 個檔案，共約 ${Math.round(got/1048576)} MB）`})}catch(e){}
+  $("local-dl").onclick=async()=>{
+    localSt.downloading=true;renderLocal();$("local-bar").hidden=false;
+    try{const r=await LA.download();Object.assign(localSt,r);toast("模型下載完成");if(cfg.localMode==="off"){cfg.localMode="fallback";saveCfg()}retryAll()}
+    catch(e){toast(e.message||"下載失敗");}
+    finally{localSt.downloading=false;await refreshLocal()}
+  };
+  $("local-rm").onclick=async()=>{try{await LA.remove()}catch(e){}cfg.localMode="off";saveCfg();await refreshLocal();toast("已刪除本機模型")};
+  $("s-localMode").addEventListener("change",e=>{
+    if(e.target.value!=="off"&&!localSt.ready){toast("請先下載模型");e.target.value=cfg.localMode||"off";return}
+    cfg.localMode=e.target.value;saveCfg();retryAll()});
+  refreshLocal().then(()=>{if(localOn()&&db)retryAll()});
+}
 $("s-keepScreen").addEventListener("change",()=>{if(R.state==="recording")keepAwake(cfg.keepScreen!=="0")});
 if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
 async function updateStorage(){try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
