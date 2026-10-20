@@ -278,9 +278,10 @@ audio{width:100%;height:40px}
             <div class="field full"><label class="label" for="s-sttEngine">轉錄服務</label>
               <select id="s-sttEngine">
                 <option value="gemini">Google Gemini（免費方案）</option>
+                <option value="gtx">Gemini Transcribe（免費方案，轉錄專用模型）</option>
                 <option value="groq">Groq Whisper</option>
               </select></div>
-            <div class="field full help" data-eng="gemini">
+            <div class="field full help" data-eng="gemini gtx">
               <strong>如何取得 Gemini API 金鑰（免費，約 2 分鐘）</strong>
               <ol>
                 <li>用瀏覽器開啟 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>，以 Google 帳號登入</li>
@@ -290,11 +291,12 @@ audio{width:100%;height:40px}
               </ol>
               <span class="note">不需要綁信用卡。按鈕名稱若因 Google 改版而不同，找「API key」相關選項即可。金鑰請勿分享給他人。</span>
             </div>
-            <div class="field full" data-eng="gemini"><label class="label" for="s-gemKey">Gemini API 金鑰</label><input id="s-gemKey" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
-            <div class="field" data-eng="gemini"><label class="label" for="s-gemModel">Gemini 主模型</label><select id="s-gemModel"></select></div>
-            <div class="field" data-eng="gemini"><label class="label" for="s-gemFallback">備用模型（主模型忙碌時改用）</label><select id="s-gemFallback"></select></div>
+            <div class="field full" data-eng="gemini gtx"><label class="label" for="s-gemKey">Gemini API 金鑰</label><input id="s-gemKey" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
+            <div class="field" data-eng="gemini gtx"><label class="label" for="s-gemModel">Gemini 主模型</label><select id="s-gemModel"></select></div>
+            <div class="field" data-eng="gemini gtx"><label class="label" for="s-gemFallback">備用模型（主模型忙碌時改用）</label><select id="s-gemFallback"></select></div>
             <div class="field" data-eng="gemini"><label class="label" for="s-gemThink">轉錄時的思考程度</label><select id="s-gemThink"><option value="low">低（較快）</option><option value="medium">中（模型預設）</option></select></div>
-            <div class="field full headrow" data-eng="gemini"><span class="note" id="gem-models-note" style="flex:1;min-width:0"></span><button class="btn-ghost" id="gem-models-refresh">更新模型清單</button></div>
+            <p class="note full" data-eng="gtx">轉錄使用 Google 的語音轉錄專用模型 gemini-3.5-transcribe（預覽版）。它忙碌時，該段改用上方的備用模型轉錄；主模型用於產生會議記錄。每段錄音（約 10–25 秒）的時間點依字數平均估算，點逐字稿時位置可能差幾秒。</p>
+            <div class="field full headrow" data-eng="gemini gtx"><span class="note" id="gem-models-note" style="flex:1;min-width:0"></span><button class="btn-ghost" id="gem-models-refresh">更新模型清單</button></div>
             <div class="field full" data-eng="groq"><label class="label" for="s-groq">Groq API 金鑰</label><input id="s-groq" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
             <div class="field" data-eng="groq"><label class="label" for="s-stt">Whisper 模型</label>
               <select id="s-stt">
@@ -304,7 +306,7 @@ audio{width:100%;height:40px}
             <div class="field full"><label class="label" for="s-vocab">常用專有名詞（提高辨識率，以逗號分隔）</label><textarea id="s-vocab" placeholder="例：產品代號、品牌名稱、客戶名稱、專業術語"></textarea></div>
           </div>
           <p class="note">錄音每 10–25 秒依停頓切段送出轉錄，逐字稿約延遲 10–20 秒出現。沒有網路或超過免費額度時，錄音照常保存，之後自動補轉錄。</p>
-          <p class="note" data-eng="gemini">Gemini 免費方案的內容可能被 Google 用來改進模型，機密會議請留意。各模型的免費額度可在 aistudio.google.com/rate-limit 查看。</p>
+          <p class="note" data-eng="gemini gtx">Gemini 免費方案的內容可能被 Google 用來改進模型，機密會議請留意。各模型的免費額度可在 aistudio.google.com/rate-limit 查看。</p>
         </section>
         <section class="panel">
           <h2>會議記錄</h2>
@@ -830,8 +832,44 @@ async function gemini(parts,schema,ms,opt){
 }
 const noFallback={};
 const SEG_SCHEMA={type:"OBJECT",properties:{segments:{type:"ARRAY",items:{type:"OBJECT",properties:{start:{type:"NUMBER"},end:{type:"NUMBER"},text:{type:"STRING"}},required:["start","end","text"]}}},required:["segments"]};
-async function transcribe(c){return cfg.sttEngine==="groq"?transcribeGroq(c):transcribeGemini(c)}
-async function transcribeGemini(c){
+async function transcribe(c){return cfg.sttEngine==="groq"?transcribeGroq(c):cfg.sttEngine==="gtx"?transcribeGtx(c):transcribeGemini(c)}
+// Gemini Transcribe（語音轉錄專用模型，走 interactions 接口）
+const GTX_MODEL="gemini-3.5-transcribe";
+function gtxText(d){
+  if(typeof d.output_text==="string")return d.output_text;
+  const out=[];
+  const walk=o=>{if(!o||typeof o!=="object")return;if(Array.isArray(o)){o.forEach(walk);return}
+    if(typeof o.text==="string"&&o.type!=="word_info")out.push(o.text);
+    for(const k in o){if(k==="input"||k==="annotations"||k==="text")continue;walk(o[k])}};
+  walk(d);return out.join("\n");
+}
+async function transcribeGtx(c){
+  const t=(c.blob.type||"audio/webm").split(";")[0];
+  const mime=/mp4|m4a/.test(t)?"audio/mp4":/ogg/.test(t)?"audio/ogg":/webm/.test(t)?"audio/webm":t;
+  const tc={mode:"verbatim"};
+  const vocab=(cfg.vocab||"").split(/[,，、\n]/).map(x=>x.trim()).filter(Boolean).slice(0,100);
+  if(vocab.length)tc.custom_vocabulary=vocab;
+  const body=JSON.stringify({model:GTX_MODEL,input:[{type:"audio",data:await blobB64(c.blob),mime_type:mime}],generation_config:{transcription_config:tc}});
+  const url="https://generativelanguage.googleapis.com/v1beta/interactions",h={"content-type":"application/json","x-goog-api-key":cfg.gemKey};
+  let r;
+  try{r=await fetchT(url,{method:"POST",headers:Object.assign({"Api-Revision":"2026-05-20"},h),body},120000)}
+  catch(e){r=await fetchT(url,{method:"POST",headers:h,body},120000)} // 少數環境擋這個標頭時改用不帶標頭
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok){
+    // 轉錄專用模型忙碌：該段改用備用模型
+    const fbm=cfg.gemFallback||"";
+    if(r.status>=500&&fbm&&!noFallback[fbm]){try{return await transcribeGemini(c,fbm)}catch(e){if(e.fatal)noFallback[fbm]=true}}
+    if(r.status===404){const er=new Error("找不到 Gemini Transcribe 模型，請到設定改用「Google Gemini」轉錄");er.fatal=true;throw er}
+    throw gemErr(r,data,"轉錄");
+  }
+  const text=toTW(gtxText(data).replace(/\s+/g," ").trim());
+  if(!text||HALLU.some(re=>re.test(text)))return [];
+  // 依句尾標點分句，時間點依字數平均分配到這段錄音
+  const sents=(text.match(/[^。！？!?；;]+[。！？!?；;]*/g)||[text]).map(x=>x.trim()).filter(Boolean);
+  const total=sents.reduce((a,x)=>a+x.length,0)||1;let acc=0;
+  return sents.map(x=>{const st=c.dur*acc/total;acc+=x.length;return{s:c.start+st,e:c.start+c.dur*acc/total,text:x}}).filter(x=>!HALLU.some(re=>re.test(x.text)));
+}
+async function transcribeGemini(c,onlyModel){
   const m=meetings.find(x=>x.id===c.mid);
   const tail=m&&m.segs.length?m.segs.slice(-3).map(s=>s.text).join(" ").slice(-150):"";
   const t=(c.blob.type||"audio/webm").split(";")[0];
@@ -845,9 +883,9 @@ async function transcribeGemini(c){
   (cfg.vocab?`\n常見專有名詞（聽到相近發音時優先使用）：${cfg.vocab}`:"")+
   (tail?`\n前一段內容（僅供理解上下文，不要重複轉錄）：${tail}`:"");
   const parts=[{text:prompt},{inline_data:{mime_type:mime,data:await blobB64(c.blob)}}];
-  let res=await gemini(parts,SEG_SCHEMA,120000,{think:cfg.gemThink||"low"});
+  let res=await gemini(parts,SEG_SCHEMA,120000,{think:cfg.gemThink||"low",model:onlyModel});
   const fbm=cfg.gemFallback||"";
-  if(res.r.status>=500&&fbm&&!noFallback[fbm]&&fbm!==(cfg.gemModel||"")){
+  if(!onlyModel&&res.r.status>=500&&fbm&&!noFallback[fbm]&&fbm!==(cfg.gemModel||"")){
     try{const fb=await gemini(parts,SEG_SCHEMA,120000,{model:fbm,think:cfg.gemThink||"low"});if(fb.r.ok)res=fb;else if(fb.r.status===404)noFallback[fbm]=true}catch(e){}
   }
   const {r,data,text}=res;
@@ -1005,7 +1043,7 @@ $("btn-settings").onclick=()=>{showView("settings");renderCatSettings();renderGe
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
 const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
-function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=el.dataset.eng!==cfg.sttEngine);document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
+function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=!el.dataset.eng.split(" ").includes(cfg.sttEngine));document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
 SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
   if((k==="gemKey"||k==="groqKey")&&cfg[k]){toast("金鑰已儲存");retryAll()}
   if(k==="sttEngine"||k==="gemModel")retryAll()})});

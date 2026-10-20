@@ -50,6 +50,7 @@
   - `audio`：完整錄音的分塊 `[mid, i]`
   - `chunks`：待轉錄片段 `[mid, start]`，轉錄成功後刪除
 - **轉錄佇列**：依序送出。請求用 `fetchT` 加逾時（轉錄 120 秒、會議記錄 300 秒）。網路錯誤（`e.net`）與 429／5xx（`e.transient`）不計失敗次數，以 2、4、8… 秒最長 60 秒的間隔持續重試（v2.0.5 起，因實機常在網路切換、螢幕關閉時失敗）；其他錯誤最多 3 次後標為失敗。等待可被打斷：恢復連線、回到 App 畫面、按「重試」都會立刻再送。v2.0.6 起：整段轉錄另有 180 秒上限（`Promise.race`，防止卡在 fetch 以外的步驟）；每 30 秒檢查佇列沒在跑就重啟；畫面顯示這段已等秒數（`qStart`）
+- **Gemini Transcribe（v2.0.8）**：`cfg.sttEngine==="gtx"`。`POST /v1beta/interactions`，body `{model:"gemini-3.5-transcribe",input:[{type:"audio",data:<base64>,mime_type}],generation_config:{transcription_config:{mode:"verbatim",custom_vocabulary}}}`，標頭 `Api-Revision: 2026-05-20`（被擋時改不帶重送）。不開逐字時間點（會降低準確度且不能和專有名詞並用），文字依句尾標點分句、時間依字數平均分配到片段。回應文字取 `output_text`，沒有就走訪回應收集 `text`（REST 回應結構文件沒寫清楚，2026-10-20 使用者以比較工具實測效果良好）。5xx 時該段改用 `cfg.gemFallback` 走 generateContent；404 視為致命錯誤。設定欄位 `data-eng` 可列多個引擎（以空白分隔）
 - **Gemini 思考程度（v2.0.6）**：轉錄請求帶 `generationConfig.thinkingConfig.thinkingLevel`，設定 `cfg.gemThink` 預設 "low"（"medium" 時不送，用模型預設）；模型回 400 且訊息含 think 時，記住該模型並改為不送再重試。會議記錄不套用。依 Google 文件，Gemini 3.8 Flash 預設 medium、不支援 minimal
 - **備用模型（v2.0.6）**：轉錄時主模型回 5xx，該段立刻改用備用模型；備用模型回 404 則本次執行期間不再使用
 - **模型選單（v2.0.7）**：主模型 `cfg.gemModel`、備用模型 `cfg.gemFallback`（空字串＝不使用）皆為下拉選單。清單由 `GET /v1beta/models` 取得，只留支援 generateContent 的 `gemini-*`，排除 tts／image／embed／live／audio 等，且只留免費方案可用的 Flash／Flash-Lite（`gemFree`，依名稱判斷：模型清單 API 沒有免費標示，2026-10-20 對照價格頁，Pro、Omni、圖片類不免費）；依版本號排序，preview／exp 排後。存在 `cfg.gemModels`、`cfg.gemModelsAt`。同步時機：填入金鑰、開啟設定（超過 1 小時）、開啟 App（超過 1 天）、手動按鈕。選用的模型不在清單時自動換成推薦模型（最新正式版 Flash／Flash-Lite）
