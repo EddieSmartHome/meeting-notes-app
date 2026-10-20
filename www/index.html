@@ -384,6 +384,22 @@ audio{width:100%;height:40px}
           </div>
           <p class="note">不想用 API 時，可按會議頁的「複製提示詞」貼到 Claude App 整理。金鑰、錄音與逐字稿都只存在這台手機上，移除 App 會一併刪除。</p>
         </section>
+        <section class="panel" id="sync-panel" hidden>
+          <h2>雲端硬碟同步</h2>
+          <p class="note">多台裝置登入同一個 Google 帳號，會議就會自動同步。資料存在你 Google 雲端硬碟裡本 App 專用的隱藏資料夾，不會出現在雲端硬碟畫面中，只有這個 App 讀得到（會佔用你的雲端硬碟容量）。API 金鑰與裝置設定不會同步。</p>
+          <p class="note" id="sync-status"></p>
+          <div class="headrow">
+            <button class="btn-primary" id="sync-on">連結 Google 帳號並開始同步</button>
+            <button id="sync-now" hidden>立即同步</button>
+            <button class="btn-ghost" id="sync-off" hidden>停止同步</button>
+          </div>
+          <div id="sync-audio" style="margin-top:8px">
+            <span class="label">錄音檔同步時機（文字資料隨時同步）</span>
+            <label class="toggle"><input type="checkbox" id="sync-wifi"> 連上 Wi-Fi 時</label>
+            <label class="toggle"><input type="checkbox" id="sync-cell"> 使用行動網路時</label>
+          </div>
+          <p class="note">兩台裝置都改了同一場會議時，以最後修改的為準；刪除會議也會同步刪除。正在錄音的會議，錄音結束後才同步。</p>
+        </section>
         <section class="panel">
           <h2>會議分類</h2>
           <p class="note">自訂會議的分類（例如：週會、客戶會議、專案檢討）。每個分類可以設定自己的會議記錄格式；沒有設定就用預設格式。</p>
@@ -492,7 +508,7 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",recMode:"meeting",recFormat:"auto",recKbps:"64",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0,localMode:"off"},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",recMode:"meeting",recFormat:"auto",recKbps:"64",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0,localMode:"off",syncOn:false,syncAudioWifi:true,syncAudioCell:false,syncLast:0,syncAccount:"",syncDeleted:{},catAt:0},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
 const cloudReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
@@ -533,7 +549,15 @@ const curM=()=>cur||draft;
 
 function newMeetingObj(){return{id:uid(),title:draft.title,date:draft.date||localNow(),place:draft.place,people:draft.people,cat:draft.cat||(cfg.catFilter&&cfg.catFilter!=="none"?cfg.catFilter:""),segs:[],minutes:"",duration:0,mime:"",hasAudio:false,status:"new",createdAt:Date.now(),updatedAt:Date.now()}}
 async function ensureMeeting(){if(cur)return cur;cur=newMeetingObj();meetings.unshift(cur);await saveM(cur);renderList();return cur}
-async function saveM(m){m.updatedAt=Date.now();await dbPut("meetings",m)}
+// 每個欄位記錄最後修改時間（m.ft），同步時逐欄位以較新的為準，避免兩台各改不同欄位時互相蓋掉
+const SYNC_FIELDS=["title","date","place","people","cat","segs","minutes","duration","mime","hasAudio","status","recInfo","createdAt"];
+const mSnap=new Map();
+function snapOf(m){const o={};SYNC_FIELDS.forEach(f=>{o[f]=JSON.stringify(m[f]===undefined?null:m[f])});return o}
+async function saveM(m){
+  const now=Date.now(),prev=mSnap.get(m.id),cur=snapOf(m);m.ft=m.ft||{};
+  SYNC_FIELDS.forEach(f=>{if(prev?prev[f]!==cur[f]:!(f in m.ft))m.ft[f]=now});
+  mSnap.set(m.id,cur);m.updatedAt=now;await dbPut("meetings",m);syncSoon();
+}
 
 // ================= 會議清單 =================
 function renderList(){
@@ -647,6 +671,7 @@ $("btn-delete").onclick=async()=>{
   clearTimeout(delArm);delArm=null;b.textContent="刪除";b.classList.remove("btn-rec");
   const id=cur.id;
   await dbDel("meetings",id);await dbDel("audio",midRange(id));await dbDel("chunks",midRange(id));
+  if(cfg.syncOn){cfg.syncDeleted=cfg.syncDeleted||{};cfg.syncDeleted[id]=Date.now();saveCfg();syncSoon(3000)}
   meetings=meetings.filter(m=>m.id!==id);delete pendingCount[id];
   cur=null;draft={title:"",date:localNow(),place:"",people:""};renderAll();toast("已刪除");updateStorage();
 };
@@ -1246,7 +1271,7 @@ $("btn-share").onclick=async()=>{const m=curM();
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
-$("btn-settings").onclick=()=>{showView("settings");renderRecInfo();renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
+$("btn-settings").onclick=()=>{showView("settings");renderSync();renderRecInfo();renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
 const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"],["s-recMode","recMode"],["s-recFormat","recFormat"],["s-recKbps","recKbps"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
@@ -1447,7 +1472,7 @@ function renderCatSettings(){
     d.append(f1,f2,row);box.appendChild(d);
   });
 }
-function saveCats(){saveCfg();renderCatSelects();renderList()}
+function saveCats(){cfg.catAt=Date.now();saveCfg();renderCatSelects();renderList();syncSoon()}
 // 新增分類：先輸入名稱，按「新增」才建立；建立後保持收合
 function catNewShow(on){$("cat-new").hidden=!on;$("cat-add").hidden=on;$("cat-new-err").hidden=true;if(on){$("cat-new-name").value="";$("cat-new-name").focus()}}
 function addCategory(raw){
@@ -1618,6 +1643,159 @@ function browserDownload(bytes,name){
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([bytes],{type:"application/zip"}));a.download=name;
   document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);
 }
+// ================= Google 雲端硬碟同步 =================
+// 存在 appDataFolder（隱藏、只有本 App 讀得到）：m_<會議id>.json、a_<會議id>.<副檔名>（錄音）、meta.json（分類、刪除紀錄）
+const DA=PL.DriveAuth,NET=PL.Network;
+const DRIVE="https://www.googleapis.com/drive/v3",DRIVE_UP="https://www.googleapis.com/upload/drive/v3";
+const dfetch=(...a)=>(window.CapacitorWebFetch||window.fetch)(...a);
+let syncTok=null,syncTokAt=0,syncBusy=false,syncTimer=null;
+function syncSoon(ms){if(!cfg.syncOn||!DA)return;clearTimeout(syncTimer);syncTimer=setTimeout(()=>runSync(false),ms||20000)}
+async function syncToken(interactive,force){
+  if(!force&&syncTok&&Date.now()-syncTokAt<40*60000)return syncTok;
+  const r=await DA.authorize({interactive:!!interactive});syncTok=r.accessToken;syncTokAt=Date.now();return syncTok;
+}
+async function gd(path,opt,retry){
+  opt=opt||{};const tok=await syncToken(false);
+  const o=Object.assign({},opt,{headers:Object.assign({Authorization:"Bearer "+tok},opt.headers||{})});
+  let r;try{r=await dfetch(path.startsWith("http")?path:DRIVE+path,o)}catch(e){throw netErr(e,0)}
+  if(r.status===401&&retry!==false){syncTok=null;await syncToken(false,true);return gd(path,opt,false)}
+  if(!r.ok){const t=await r.text().catch(()=>"");throw new Error(`雲端硬碟回應 HTTP ${r.status}：${t.slice(0,160)}`)}
+  return r;
+}
+async function gdList(){
+  let out=[],pt="";
+  do{const r=await gd(`/files?spaces=appDataFolder&pageSize=1000&fields=nextPageToken,files(id,name,size,appProperties)`+(pt?`&pageToken=${encodeURIComponent(pt)}`:""));
+    const j=await r.json();out=out.concat(j.files||[]);pt=j.nextPageToken}while(pt);
+  return out;
+}
+async function gdPutJson(name,obj,props,id){
+  const meta={name,appProperties:props||{}};if(!id)meta.parents=["appDataFolder"];
+  const bd="mtg"+Math.random().toString(36).slice(2);
+  const body=`--${bd}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${bd}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${bd}--`;
+  await gd(DRIVE_UP+(id?`/files/${id}`:"/files")+"?uploadType=multipart&fields=id",{method:id?"PATCH":"POST",headers:{"Content-Type":`multipart/related; boundary=${bd}`},body});
+}
+async function gdPutBlob(name,blob){
+  const type=blob.type||"application/octet-stream";
+  const r=await gd(DRIVE_UP+"/files?uploadType=resumable",{method:"POST",headers:{"Content-Type":"application/json; charset=UTF-8","X-Upload-Content-Type":type},body:JSON.stringify({name,parents:["appDataFolder"]})});
+  const loc=r.headers.get("Location")||r.headers.get("location");
+  if(loc){let r2;try{r2=await dfetch(loc,{method:"PUT",headers:{"Content-Type":type},body:blob})}catch(e){throw netErr(e,0)}
+    if(!r2.ok)throw new Error("錄音上傳失敗 HTTP "+r2.status);return}
+  // 拿不到續傳網址時，改用一次上傳
+  const bd="mtg"+Math.random().toString(36).slice(2);
+  const body=new Blob([`--${bd}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({name,parents:["appDataFolder"]})}\r\n--${bd}\r\nContent-Type: ${type}\r\n\r\n`,blob,`\r\n--${bd}--`]);
+  await gd(DRIVE_UP+"/files?uploadType=multipart&fields=id",{method:"POST",headers:{"Content-Type":`multipart/related; boundary=${bd}`},body});
+}
+async function netType(){
+  try{if(NET){const s=await NET.getStatus();return s.connected===false?"none":s.connectionType}}catch(e){}
+  const c=navigator.connection;return c&&c.type?c.type:"unknown";
+}
+const syncPack=m=>{const o={};for(const k in m)if(k!=="segsPrev"&&k!=="autoTried"&&k!=="su")o[k]=m[k];return o};
+function setSyncStatus(t){const el=$("sync-status");if(el)el.textContent=t}
+function syncSummary(){if(!cfg.syncOn)return"尚未啟用。";const t=cfg.syncLast?new Date(cfg.syncLast):null;
+  return `已啟用${cfg.syncAccount?`（${cfg.syncAccount}）`:""}・上次同步：${t?`${t.getMonth()+1}/${t.getDate()} ${p2(t.getHours())}:${p2(t.getMinutes())}`:"尚未完成"}`}
+function renderSync(){
+  if(!DA)return;$("sync-panel").hidden=false;
+  $("sync-on").hidden=cfg.syncOn;$("sync-now").hidden=!cfg.syncOn;$("sync-off").hidden=!cfg.syncOn;
+  $("sync-wifi").checked=!!cfg.syncAudioWifi;$("sync-cell").checked=!!cfg.syncAudioCell;
+  if(!syncBusy)setSyncStatus(syncSummary());
+}
+async function runSync(manual){
+  if(!DA||!cfg.syncOn||syncBusy||!db)return;
+  if(!navigator.onLine){if(manual)setSyncStatus("目前沒有網路，連線後會自動同步");return}
+  syncBusy=true;setSyncStatus("同步中…");$("sync-now").disabled=true;
+  let up=0,down=0,aup=0,adown=0,removed=0;
+  try{
+    const files=await gdList();const byName={};files.forEach(f=>{byName[f.name]=f});
+    let meta={categories:[],catAt:0,deleted:{}};
+    if(byName["meta.json"]){try{meta=Object.assign(meta,await (await gd(`/files/${byName["meta.json"].id}?alt=media`)).json())}catch(e){}}
+    // 刪除紀錄：合併兩邊，保留 180 天
+    const del={},now=Date.now();
+    [meta.deleted||{},cfg.syncDeleted||{}].forEach(o=>Object.entries(o).forEach(([id,t])=>{if(now-t<180*86400000)del[id]=Math.max(del[id]||0,t)}));
+    // 分類：以較新的一邊為準
+    let catChanged=false;
+    if((meta.catAt||0)>(cfg.catAt||0)){cfg.categories=meta.categories||[];cfg.catAt=meta.catAt;catChanged=true}
+    // 套用刪除
+    for(const [id,t] of Object.entries(del)){
+      const m=meetings.find(x=>x.id===id);
+      if(m&&(m.updatedAt||0)<=t&&!(R.state!=="idle"&&R.mid===id)){
+        await dbDel("meetings",id);await dbDel("audio",midRange(id));await dbDel("chunks",midRange(id));
+        meetings=meetings.filter(x=>x.id!==id);if(cur&&cur.id===id){cur=null;draft={title:"",date:localNow(),place:"",people:""};renderAll()}removed++;
+      }
+      for(const f of files)if((f.name===`m_${id}.json`||f.name.startsWith(`a_${id}.`))&&!f._gone){await gd(`/files/${f.id}`,{method:"DELETE"});f._gone=true}
+    }
+    // 會議：雲端有別台的新版本就逐欄位合併；只有本機改過就上傳。m.su＝上次同步時雲端的版本
+    const ids=new Set(meetings.map(m=>m.id));
+    files.forEach(f=>{const mm=/^m_(.+)\.json$/.exec(f.name);if(mm&&!f._gone)ids.add(mm[1])});
+    for(const id of ids){
+      if(del[id])continue;
+      let m=meetings.find(x=>x.id===id);
+      if(m&&(m.status==="recording"||(R.state!=="idle"&&R.mid===id)))continue;
+      const f=byName[`m_${id}.json`],has=f&&!f._gone,ru=has?+((f.appProperties||{}).u)||0:0;
+      if(has&&(!m||ru!==(m.su||0))){
+        const rm=await (await gd(`/files/${f.id}?alt=media`)).json();if(!rm||rm.id!==id)continue;
+        rm.updatedAt=ru||rm.updatedAt||Date.now();
+        let res=rm,localNewer=false;
+        if(m){
+          res=Object.assign({},m);res.ft=Object.assign({},m.ft||{});
+          SYNC_FIELDS.forEach(k=>{const rt=(rm.ft&&rm.ft[k])||rm.updatedAt||0,lt=(m.ft&&m.ft[k])||m.updatedAt||0;
+            if(rt>lt){res[k]=rm[k];res.ft[k]=rt}else if(lt>rt&&JSON.stringify(m[k])!==JSON.stringify(rm[k]))localNewer=true});
+          res.updatedAt=Math.max(m.updatedAt||0,rm.updatedAt||0);
+        }
+        res.su=ru;
+        if(localNewer){res.updatedAt=Date.now();await gdPutJson(`m_${id}.json`,syncPack(res),{u:String(res.updatedAt)},f.id);res.su=res.updatedAt;up++}
+        await dbPut("meetings",res);mSnap.set(id,snapOf(res));meetings=meetings.filter(x=>x.id!==id).concat(res);
+        if(cur&&cur.id===id){cur=res;renderAll()}
+        down++;
+      }else if(m&&(!has||(m.updatedAt||0)>(m.su||0))){
+        await gdPutJson(`m_${id}.json`,syncPack(m),{u:String(m.updatedAt||0)},has?f.id:null);
+        m.su=m.updatedAt||0;await dbPut("meetings",m);up++;
+      }
+    }
+    // 錄音：依設定的網路環境
+    const net=await netType();
+    const audioOK=(net==="wifi"&&cfg.syncAudioWifi)||((net==="cellular"||net==="4g"||net==="3g"||net==="5g")&&cfg.syncAudioCell);
+    if(audioOK){
+      for(const m of meetings){
+        if(!m.hasAudio||m.status==="recording"||del[m.id])continue;
+        const af=files.find(f=>!f._gone&&f.name.startsWith(`a_${m.id}.`));
+        const parts=await dbGetAll("audio",midRange(m.id));
+        if(parts.length&&!af){setSyncStatus(`上傳錄音中：${m.title||"未命名會議"}…`);const blob=await getAudioBlob(m);if(blob){await gdPutBlob(`a_${m.id}.${fileExt(blob.type)}`,blob);aup++}}
+        else if(!parts.length&&af){setSyncStatus(`下載錄音中：${m.title||"未命名會議"}…`);const b=await (await gd(`/files/${af.id}?alt=media`)).blob();
+          await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:(m.mime||b.type||"audio/webm").split(";")[0]})});adown++;if(cur&&cur.id===m.id){audioFor=null;loadPlayer()}}
+      }
+    }
+    await gdPutJson("meta.json",{categories:cfg.categories.map(({_open,...c})=>c),catAt:cfg.catAt||0,deleted:del},{},byName["meta.json"]&&byName["meta.json"].id);
+    if(!cfg.syncAccount){try{const a=await (await gd("/about?fields=user(emailAddress)")).json();cfg.syncAccount=(a.user&&a.user.emailAddress)||""}catch(e){}}
+    cfg.syncDeleted={};cfg.syncLast=Date.now();saveCfg();
+    if(catChanged){renderCatSelects();if(!$("view-settings").hidden)renderCatSettings()}
+    if(up||down||removed||catChanged)renderList();
+    const parts=[up&&`上傳 ${up} 場`,down&&`下載 ${down} 場`,removed&&`刪除 ${removed} 場`,aup&&`上傳錄音 ${aup} 個`,adown&&`下載錄音 ${adown} 個`].filter(Boolean);
+    setSyncStatus(syncSummary()+(parts.length?`（${parts.join("、")}）`:""));
+    if(manual)toast(parts.length?"同步完成："+parts.join("、"):"已是最新");
+  }catch(e){
+    const msg=e.message||String(e);
+    if(/NEED_CONSENT/.test(msg)){setSyncStatus("需要重新連結 Google 帳號：請按「立即同步」");syncTok=null}
+    else setSyncStatus("同步失敗："+msg);
+    if(manual)toast("同步失敗");
+  }finally{syncBusy=false;$("sync-now").disabled=false}
+}
+if(DA){
+  $("sync-on").onclick=async()=>{
+    setSyncStatus("開啟 Google 授權畫面…");
+    try{await syncToken(true,true);cfg.syncOn=true;cfg.syncAccount="";saveCfg();renderSync();await runSync(true)}
+    catch(e){setSyncStatus("無法連結 Google 帳號："+(e.message||e))}
+  };
+  $("sync-now").onclick=async()=>{
+    try{await syncToken(true,!syncTok)}catch(e){setSyncStatus("無法連結 Google 帳號："+(e.message||e));return}
+    runSync(true);
+  };
+  $("sync-off").onclick=()=>{cfg.syncOn=false;syncTok=null;saveCfg();renderSync();setSyncStatus("已停止同步。雲端上的資料不會刪除；要完全取消授權，可到 Google 帳戶 →「安全性」→「第三方應用程式與服務」移除。")};
+  $("sync-wifi").onchange=e=>{cfg.syncAudioWifi=e.target.checked;saveCfg();syncSoon(2000)};
+  $("sync-cell").onchange=e=>{cfg.syncAudioCell=e.target.checked;saveCfg();syncSoon(2000)};
+  document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&cfg.syncOn&&Date.now()-(cfg.syncLast||0)>60000)syncSoon(1500)});
+  window.addEventListener("online",()=>syncSoon(3000));
+  setInterval(()=>{if(cfg.syncOn&&Date.now()-(cfg.syncLast||0)>10*60000)runSync(false)},5*60000);
+}
 // 錄音存檔／分享（播放器內建的「下載」在 App 裡不會動作，所以另外提供）
 let auBusy=false;
 async function exportAudio(target){
@@ -1751,12 +1929,12 @@ async function migrateV1(){
   try{db=await openDB()}catch(e){status("無法開啟本機資料庫："+(e.message||e));return}
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
   await migrateV1();
-  meetings=await dbGetAll("meetings");
+  meetings=await dbGetAll("meetings");meetings.forEach(m=>mSnap.set(m.id,snapOf(m)));
   // App 被關閉時正在錄音的會議：保留已存下的錄音
   for(const m of meetings){if(m.status==="recording"){m.status="done";const parts=await dbGetAll("audio",midRange(m.id));if(!m.duration&&m.segs.length)m.duration=m.segs[m.segs.length-1].e||0;m.hasAudio=parts.length>0;await saveM(m)}}
   const last=[...meetings].sort((a,b)=>b.updatedAt-a.updatedAt)[0];
   cur=last||null;
-  renderAll();updateStorage();pump();
+  renderAll();updateStorage();pump();if(cfg.syncOn)syncSoon(4000);
   if(!sttReady()&&!meetings.length){status("第一次使用：請先到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰")}
   window.addEventListener("online",()=>{retryAll()});
   document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")retryAll()});

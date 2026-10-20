@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RecordingServicePlugin.class);
         registerPlugin(LocalAsrPlugin.class);
+        registerPlugin(DriveAuthPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
