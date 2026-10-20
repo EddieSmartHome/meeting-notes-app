@@ -5,6 +5,10 @@ name: Build local ASR engine
 # 結果放在本 repo 的 Release「local-asr-v1」，一般的 APK 編譯直接下載使用，不會重編。
 # 需要更新引擎時（例如 sherpa-onnx 發新版），改 sherpa_ref 後再執行一次。
 on:
+  # 修改這個檔案並推送也會執行（例如改下面的預設 sherpa_ref）
+  push:
+    branches: [main]
+    paths: [".github/workflows/build-local-asr.yml"]
   workflow_dispatch:
     inputs:
       sherpa_ref:
@@ -25,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: k2-fsa/sherpa-onnx
-          ref: ${{ inputs.sherpa_ref }}
+          ref: ${{ inputs.sherpa_ref || 'db749e72258c1eef25d314c0e154eeb66bf09350' }}
           path: sherpa
 
       - uses: actions/setup-java@v5
@@ -66,8 +70,8 @@ jobs:
       - name: Publish to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag }}
-          REF: ${{ inputs.sherpa_ref }}
+          TAG: ${{ inputs.release_tag || 'local-asr-v1' }}
+          REF: ${{ inputs.sherpa_ref || 'db749e72258c1eef25d314c0e154eeb66bf09350' }}
         run: |
           cd $GITHUB_WORKSPACE/out
           NOTES="本機辨識（離線）用的檔案，供 App 編譯與下載使用，不是 App 版本。
