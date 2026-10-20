@@ -51,7 +51,8 @@
   - `chunks`：待轉錄片段 `[mid, start]`，轉錄成功後刪除
 - **轉錄佇列**：依序送出。請求用 `fetchT` 加逾時（轉錄 120 秒、會議記錄 300 秒）。網路錯誤（`e.net`）與 429／5xx（`e.transient`）不計失敗次數，以 2、4、8… 秒最長 60 秒的間隔持續重試（v2.0.5 起，因實機常在網路切換、螢幕關閉時失敗）；其他錯誤最多 3 次後標為失敗。等待可被打斷：恢復連線、回到 App 畫面、按「重試」都會立刻再送。v2.0.6 起：整段轉錄另有 180 秒上限（`Promise.race`，防止卡在 fetch 以外的步驟）；每 30 秒檢查佇列沒在跑就重啟；畫面顯示這段已等秒數（`qStart`）
 - **Gemini 思考程度（v2.0.6）**：轉錄請求帶 `generationConfig.thinkingConfig.thinkingLevel`，設定 `cfg.gemThink` 預設 "low"（"medium" 時不送，用模型預設）；模型回 400 且訊息含 think 時，記住該模型並改為不送再重試。會議記錄不套用。依 Google 文件，Gemini 3.8 Flash 預設 medium、不支援 minimal
-- **備用模型（v2.0.6）**：轉錄時主模型回 5xx，該段立刻改用 `gemini-3.5-flash-lite`；備用模型回 404 則本次執行期間不再使用
+- **備用模型（v2.0.6）**：轉錄時主模型回 5xx，該段立刻改用備用模型；備用模型回 404 則本次執行期間不再使用
+- **模型選單（v2.0.7）**：主模型 `cfg.gemModel`、備用模型 `cfg.gemFallback`（空字串＝不使用）皆為下拉選單。清單由 `GET /v1beta/models` 取得，只留支援 generateContent 的 `gemini-*`，排除 tts／image／embed／live／audio 等；依版本號排序，preview／exp 排後。存在 `cfg.gemModels`、`cfg.gemModelsAt`。同步時機：填入金鑰、開啟設定（超過 1 小時）、開啟 App（超過 1 天）、手動按鈕。選用的模型不在清單時自動換成推薦模型（最新正式版 Flash／Flash-Lite）
 - **Gemini 轉錄**：`generateContent`，音訊以 inline base64 送出，要求結構化 JSON `{segments:[{start,end,text}]}`；時間為片段內相對秒數，再加上片段起點
 - **Groq 轉錄**：`/audio/transcriptions`，`verbose_json`，依 `no_speech_prob` 過濾
 - **後處理**：OpenCC 簡轉台灣繁體、過濾常見幻覺字句、合併過短片段

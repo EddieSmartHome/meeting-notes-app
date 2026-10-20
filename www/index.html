@@ -291,9 +291,10 @@ audio{width:100%;height:40px}
               <span class="note">不需要綁信用卡。按鈕名稱若因 Google 改版而不同，找「API key」相關選項即可。金鑰請勿分享給他人。</span>
             </div>
             <div class="field full" data-eng="gemini"><label class="label" for="s-gemKey">Gemini API 金鑰</label><input id="s-gemKey" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
-            <div class="field" data-eng="gemini"><label class="label" for="s-gemModel">Gemini 模型</label><input id="s-gemModel"></div>
+            <div class="field" data-eng="gemini"><label class="label" for="s-gemModel">Gemini 主模型</label><select id="s-gemModel"></select></div>
+            <div class="field" data-eng="gemini"><label class="label" for="s-gemFallback">備用模型（主模型忙碌時改用）</label><select id="s-gemFallback"></select></div>
             <div class="field" data-eng="gemini"><label class="label" for="s-gemThink">轉錄時的思考程度</label><select id="s-gemThink"><option value="low">低（較快）</option><option value="medium">中（模型預設）</option></select></div>
-            <p class="note full" data-eng="gemini">主模型忙碌（HTTP 5xx）時，該段會改用備用模型 gemini-3.5-flash-lite 轉錄。</p>
+            <div class="field full headrow" data-eng="gemini"><span class="note" id="gem-models-note" style="flex:1;min-width:0"></span><button class="btn-ghost" id="gem-models-refresh">更新模型清單</button></div>
             <div class="field full" data-eng="groq"><label class="label" for="s-groq">Groq API 金鑰</label><input id="s-groq" type="password" autocomplete="off" placeholder="貼上金鑰"></div>
             <div class="field" data-eng="groq"><label class="label" for="s-stt">Whisper 模型</label>
               <select id="s-stt">
@@ -427,7 +428,7 @@ const CFGK="mtg-cfg-v2";
 const lsGet=k=>{try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}};
 const lsSet=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
 const old1=lsGet("mtg-notes-cfg-v1")||{};
-const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",gemThink:"low"},lsGet(CFGK)||{});
+const cfg=Object.assign({categories:[],catFilter:"",sttEngine:"gemini",gemKey:"",gemModel:"gemini-3.8-flash",minEngine:"gemini",groqKey:"",stt:"whisper-large-v3",vocab:"",anthKey:old1.key||"",model:old1.model||"claude-sonnet-5-5",auto:old1.auto||"0",out:old1.out||"zh",keepScreen:"1",gemThink:"low",gemFallback:"gemini-3.5-flash-lite",gemModels:[],gemModelsAt:0},lsGet(CFGK)||{});
 const saveCfg=()=>lsSet(CFGK,cfg);
 const sttName=()=>cfg.sttEngine==="groq"?"Groq":"Gemini";
 const sttReady=()=>!!(cfg.sttEngine==="groq"?cfg.groqKey:cfg.gemKey);
@@ -809,13 +810,12 @@ function gemErr(r,data,what){
   let er;
   if(r.status===400&&/API key/i.test(msg)){er=new Error("Gemini 金鑰無效，請到設定重新填入");er.fatal=true}
   else if(r.status===403){er=new Error("Gemini 金鑰沒有權限："+msg);er.fatal=true}
-  else if(r.status===404){er=new Error("找不到 Gemini 模型「"+cfg.gemModel+"」，請到設定修改模型名稱");er.fatal=true}
+  else if(r.status===404){er=new Error("找不到 Gemini 模型「"+cfg.gemModel+"」，請到設定重新選擇模型");er.fatal=true}
   else if(r.status===429){er=new Error("Gemini 免費額度暫時用完，稍後自動重試");er.wait=30000;er.transient=true}
   else if(r.status>=500){er=new Error(`Gemini 服務暫時忙碌（HTTP ${r.status}），稍後自動重試`);er.wait=15000;er.transient=true}
   else er=new Error(what+"失敗："+msg);
   return er;
 }
-const GEM_FALLBACK="gemini-3.5-flash-lite";
 const noThink={}; // 不接受 thinkingLevel 的模型（本次執行期間記住）
 async function gemini(parts,schema,ms,opt){
   opt=opt||{};const model=opt.model||cfg.gemModel||"gemini-3.8-flash";
@@ -828,7 +828,7 @@ async function gemini(parts,schema,ms,opt){
   if(think&&r.status===400&&/think/i.test((data.error&&data.error.message)||"")){noThink[model]=true;return gemini(parts,schema,ms,opt)}
   return {r,data,model,text:(((data.candidates||[])[0]||{}).content||{parts:[]}).parts.filter(p=>!p.thought&&p.text).map(p=>p.text).join("")};
 }
-let noFallback=false;
+const noFallback={};
 const SEG_SCHEMA={type:"OBJECT",properties:{segments:{type:"ARRAY",items:{type:"OBJECT",properties:{start:{type:"NUMBER"},end:{type:"NUMBER"},text:{type:"STRING"}},required:["start","end","text"]}}},required:["segments"]};
 async function transcribe(c){return cfg.sttEngine==="groq"?transcribeGroq(c):transcribeGemini(c)}
 async function transcribeGemini(c){
@@ -846,8 +846,9 @@ async function transcribeGemini(c){
   (tail?`\n前一段內容（僅供理解上下文，不要重複轉錄）：${tail}`:"");
   const parts=[{text:prompt},{inline_data:{mime_type:mime,data:await blobB64(c.blob)}}];
   let res=await gemini(parts,SEG_SCHEMA,120000,{think:cfg.gemThink||"low"});
-  if(res.r.status>=500&&!noFallback&&(cfg.gemModel||"")!==GEM_FALLBACK){
-    try{const fb=await gemini(parts,SEG_SCHEMA,120000,{model:GEM_FALLBACK,think:cfg.gemThink||"low"});if(fb.r.ok)res=fb;else if(fb.r.status===404)noFallback=true}catch(e){}
+  const fbm=cfg.gemFallback||"";
+  if(res.r.status>=500&&fbm&&!noFallback[fbm]&&fbm!==(cfg.gemModel||"")){
+    try{const fb=await gemini(parts,SEG_SCHEMA,120000,{model:fbm,think:cfg.gemThink||"low"});if(fb.r.ok)res=fb;else if(fb.r.status===404)noFallback[fbm]=true}catch(e){}
   }
   const {r,data,text}=res;
   if(!r.ok)throw gemErr(r,data,"轉錄");
@@ -1000,15 +1001,70 @@ $("btn-share").onclick=async()=>{const m=curM();
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
-$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();closeSide()};
+$("btn-settings").onclick=()=>{showView("settings");renderCatSettings();renderGemModels();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
-const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-gemModel","gemModel"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"]];
+const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
 function engUI(){document.querySelectorAll("[data-eng]").forEach(el=>el.hidden=el.dataset.eng!==cfg.sttEngine);document.querySelectorAll("[data-min]").forEach(el=>el.hidden=el.dataset.min!==cfg.minEngine)}
 SET.forEach(([id,k])=>{const el=$(id);el.value=cfg[k]||"";el.addEventListener("change",()=>{cfg[k]=el.value.trim();if(!cfg[k]&&DEF[k]){cfg[k]=DEF[k];el.value=DEF[k]}saveCfg();engUI();
   if((k==="gemKey"||k==="groqKey")&&cfg[k]){toast("金鑰已儲存");retryAll()}
   if(k==="sttEngine"||k==="gemModel")retryAll()})});
 engUI();
+
+// ================= Gemini 模型清單（從 Google 線上清單同步）=================
+const GEM_SKIP=/tts|image|embed|live|audio|robotics|computer-use|aqa|veo|imagen|learnlm|gemma|nano/i;
+function gemVer(id){const m=id.match(/gemini-(\d+(?:\.\d+)?)/);return m?parseFloat(m[1]):0}
+function gemRank(id){return gemVer(id)*100-(/preview|exp/i.test(id)?50:0)-(/\d{2,}$/.test(id)?1:0)}
+async function fetchGemModels(){
+  if(!cfg.gemKey)throw new Error("請先填入 Gemini API 金鑰");
+  let list=[],page="";
+  for(let i=0;i<5;i++){
+    const r=await fetchT("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"+(page?"&pageToken="+encodeURIComponent(page):""),{headers:{"x-goog-api-key":cfg.gemKey}},30000);
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error((d.error&&d.error.message)||("HTTP "+r.status));
+    list=list.concat(d.models||[]);page=d.nextPageToken;if(!page)break;
+  }
+  return list.filter(m=>(m.supportedGenerationMethods||[]).includes("generateContent"))
+    .map(m=>({id:String(m.name||"").replace(/^models\//,""),name:m.displayName||""}))
+    .filter(m=>/^gemini-/.test(m.id)&&!GEM_SKIP.test(m.id))
+    .sort((a,b)=>gemRank(b.id)-gemRank(a.id)||a.id.localeCompare(b.id));
+}
+// 推薦：最新的正式版 Flash（主模型）與 Flash-Lite（備用）
+function gemPick(list,lite){const c=list.filter(m=>/flash/i.test(m.id)&&(lite?/lite/i.test(m.id):!/lite/i.test(m.id)));return (c.find(m=>!/preview|exp/i.test(m.id))||c[0]||{}).id||""}
+function renderGemModels(){
+  const list=cfg.gemModels||[],ids=list.map(m=>m.id);
+  [["s-gemModel","gemModel",false],["s-gemFallback","gemFallback",true]].forEach(([id,k,fb])=>{
+    const sel=$(id);sel.textContent="";
+    if(fb)sel.add(new Option("不使用備用模型",""));
+    list.forEach(m=>sel.add(new Option(m.name&&m.name!==m.id?`${m.name}（${m.id}）`:m.id,m.id)));
+    const v=cfg[k]||"";
+    if(v&&!ids.includes(v))sel.add(new Option(list.length?`${v}（已不在清單中）`:v,v));
+    sel.value=v;
+  });
+  const at=cfg.gemModelsAt?new Date(cfg.gemModelsAt):null;
+  $("gem-models-note").textContent=!cfg.gemKey?"填入金鑰後會自動載入 Google 目前提供的模型清單。":list.length?`清單來自 Google，共 ${list.length} 個模型・${at?`${at.getMonth()+1}/${at.getDate()} ${p2(at.getHours())}:${p2(at.getMinutes())} 更新`:""}`:"尚未載入模型清單。";
+}
+async function syncGemModels(manual){
+  if(!cfg.gemKey){if(manual)toast("請先填入 Gemini API 金鑰");renderGemModels();return}
+  const btn=$("gem-models-refresh");btn.disabled=true;
+  try{
+    const list=await fetchGemModels();if(!list.length)throw new Error("沒有可用的模型");
+    cfg.gemModels=list;cfg.gemModelsAt=Date.now();
+    const ids=list.map(m=>m.id),msgs=[];
+    // 目前選的模型已下架：自動換成推薦模型
+    if(!ids.includes(cfg.gemModel)){const n=gemPick(list,false)||ids[0];if(cfg.gemModel)msgs.push(`主模型 ${cfg.gemModel} 已下架，改用 ${n}`);cfg.gemModel=n}
+    if(cfg.gemFallback&&!ids.includes(cfg.gemFallback)){const n=gemPick(list,true);msgs.push(`備用模型 ${cfg.gemFallback} 已下架，改用 ${n||"不使用"}`);cfg.gemFallback=n}
+    saveCfg();if(msgs.length){toast(msgs.join("；"));retryAll()}else if(manual)toast("模型清單已更新");
+  }catch(e){if(manual)toast("無法取得模型清單："+(e.message||e))}
+  finally{btn.disabled=false;renderGemModels()}
+}
+$("s-gemModel").addEventListener("change",e=>{cfg.gemModel=e.target.value;saveCfg();retryAll()});
+$("s-gemFallback").addEventListener("change",e=>{cfg.gemFallback=e.target.value;saveCfg()});
+$("gem-models-refresh").onclick=()=>syncGemModels(true);
+$("s-gemKey").addEventListener("change",()=>{if(cfg.gemKey)syncGemModels(false)});
+renderGemModels();
+// 開啟 App 時，清單超過 1 天就重新同步
+if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>86400000)setTimeout(()=>syncGemModels(false),3000);
 $("s-keepScreen").addEventListener("change",()=>{if(R.state==="recording")keepAwake(cfg.keepScreen!=="0")});
 if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
 async function updateStorage(){try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
