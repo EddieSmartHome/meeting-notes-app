@@ -65,6 +65,9 @@ jobs:
           curl -fsSL --retry 3 -o android/app/libs/sherpa-onnx.aar "https://github.com/${{ github.repository }}/releases/download/local-asr-v1/sherpa-onnx.aar"
           ls -lh android/app/libs/sherpa-onnx.aar
           unzip -l android/app/libs/sherpa-onnx.aar | grep -E "\.so$|classes.jar"
+          # Google 登入（雲端硬碟同步）需要 Android 7.0（API 24）以上
+          sed -i 's/minSdkVersion = [0-9]*/minSdkVersion = 24/' android/variables.gradle
+          grep -n minSdkVersion android/variables.gradle
           cat >> android/app/build.gradle <<'GRADLE'
 
           dependencies {
