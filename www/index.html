@@ -199,7 +199,14 @@ audio{width:100%;height:40px}
             <div class="field full"><label class="label" for="m-title">會議名稱</label><input id="m-title" placeholder="例：週一業務會議"></div>
             <div class="field"><label class="label" for="m-date">日期時間</label><input id="m-date" type="datetime-local"></div>
             <div class="field"><label class="label" for="m-place">地點／形式</label><input id="m-place" placeholder="例：二樓會議室"></div>
-            <div class="field full"><label class="label" for="m-cat">分類</label><select id="m-cat"></select></div>
+            <div class="field full"><label class="label" for="m-cat">分類</label><select id="m-cat"></select>
+              <div class="headrow" id="mcat-new" hidden style="margin-top:8px">
+                <label class="label" for="mcat-new-name" hidden>新分類名稱</label>
+                <input id="mcat-new-name" placeholder="輸入分類名稱，例：週會" style="flex:1;min-width:0">
+                <button class="btn-primary" id="mcat-new-ok">新增</button>
+                <button class="btn-ghost" id="mcat-new-cancel">取消</button>
+              </div>
+              <p class="err" id="mcat-new-err" hidden></p></div>
             <div class="field full"><label class="label" for="m-people">與會者</label><input id="m-people" placeholder="以逗號分隔，例：林經理, 張設計師, Amy"></div>
           </div>
         </details>
@@ -476,7 +483,7 @@ function renderCatSelects(){
   if(![...f.options].some(o=>o.value===(cfg.catFilter||"")))cfg.catFilter="";
   f.value=cfg.catFilter||"";
   const s=$("m-cat");s.textContent="";
-  [["","未分類"],...opts].forEach(([v,t])=>s.add(new Option(t,v)));
+  [["","未分類"],...opts,["__new","＋ 新增分類…"]].forEach(([v,t])=>s.add(new Option(t,v)));
   const m=curM();s.value=m.cat&&catOf(m)?m.cat:"";
 }
 $("cat-filter").addEventListener("change",e=>{cfg.catFilter=e.target.value;saveCfg();renderList()});
@@ -486,12 +493,12 @@ $("btn-menu").onclick=openSide;$("scrim").onclick=closeSide;
 
 $("btn-new").onclick=()=>{
   if(R.state!=="idle"){toast("錄音中，請先按「結束」再開新會議");return}
-  cur=null;draft={title:"",date:localNow(),place:"",people:""};showView("meeting");renderAll();closeSide();$("m-title").focus();
+  cur=null;draft={title:"",date:localNow(),place:"",people:""};showView("meeting");mcatNewShow(false);renderAll();closeSide();$("m-title").focus();
 };
 
 async function openMeeting(id){
   if(R.state!=="idle"&&R.mid!==id){toast("錄音中，請先按「結束」再切換會議");return}
-  cur=meetings.find(m=>m.id===id)||null;showView("meeting");renderAll();
+  cur=meetings.find(m=>m.id===id)||null;showView("meeting");mcatNewShow(false);renderAll();
 }
 
 // 刪除（頁內二次確認）
@@ -518,11 +525,25 @@ FIELDS.forEach(k=>{
     await saveM(cur);renderList();renderTitle();
   });
 });
-$("m-cat").addEventListener("change",async e=>{
-  const v=e.target.value;
+async function setMeetingCat(v){
   if(!cur){draft.cat=v;await ensureMeeting()}
   cur.cat=v;await saveM(cur);renderList();renderInfo();
+}
+$("m-cat").addEventListener("change",async e=>{
+  const v=e.target.value;
+  if(v==="__new"){const m=curM();e.target.value=m.cat&&catOf(m)?m.cat:"";mcatNewShow(true);return}
+  mcatNewShow(false);await setMeetingCat(v);
 });
+// 在會議資訊直接新增分類：建立後自動選上
+function mcatNewShow(on){$("mcat-new").hidden=!on;$("mcat-new-err").hidden=true;if(on){$("mcat-new-name").value="";$("mcat-new-name").focus()}}
+async function mcatNewSubmit(){
+  const r=addCategory($("mcat-new-name").value),err=$("mcat-new-err");
+  if(r.error){err.textContent=r.error;err.hidden=false;return}
+  mcatNewShow(false);await setMeetingCat(r.cat.id);toast(`已新增分類「${r.cat.name}」`);
+}
+$("mcat-new-ok").onclick=mcatNewSubmit;
+$("mcat-new-cancel").onclick=()=>mcatNewShow(false);
+$("mcat-new-name").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();mcatNewSubmit()}else if(e.key==="Escape")mcatNewShow(false)});
 function renderInfo(){const m=curM();FIELDS.forEach(k=>{$("m-"+k).value=m[k]||""});renderCatSelects();
   const c=catOf(m);
   const sum=[c?c.name:"",dateLabel(m.date),m.people].filter(Boolean).join("・");$("info-sum").textContent=sum?"　"+sum:"";
@@ -978,11 +999,16 @@ function renderCatSettings(){
 function saveCats(){saveCfg();renderCatSelects();renderList()}
 // 新增分類：先輸入名稱，按「新增」才建立；建立後保持收合
 function catNewShow(on){$("cat-new").hidden=!on;$("cat-add").hidden=on;$("cat-new-err").hidden=true;if(on){$("cat-new-name").value="";$("cat-new-name").focus()}}
+function addCategory(raw){
+  const name=(raw||"").trim();
+  if(!name)return{error:"請輸入分類名稱。"};
+  if(cfg.categories.some(c=>(c.name||"").trim()===name))return{error:`已經有「${name}」這個分類。`};
+  const c={id:"c"+uid(),name,template:""};cfg.categories.push(c);saveCats();renderCatSettings();return{cat:c};
+}
 function catNewSubmit(){
-  const name=$("cat-new-name").value.trim(),err=$("cat-new-err");
-  if(!name){err.textContent="請輸入分類名稱。";err.hidden=false;return}
-  if(cfg.categories.some(c=>(c.name||"").trim()===name)){err.textContent=`已經有「${name}」這個分類。`;err.hidden=false;return}
-  cfg.categories.push({id:"c"+uid(),name,template:""});saveCats();renderCatSettings();catNewShow(false);toast(`已新增分類「${name}」`);
+  const r=addCategory($("cat-new-name").value),err=$("cat-new-err");
+  if(r.error){err.textContent=r.error;err.hidden=false;return}
+  catNewShow(false);toast(`已新增分類「${r.cat.name}」`);
 }
 $("cat-add").onclick=()=>catNewShow(true);
 $("cat-new-ok").onclick=catNewSubmit;
