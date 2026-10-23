@@ -145,7 +145,8 @@ audio{width:100%;height:40px}
 .help a{color:var(--accent);font-weight:700;overflow-wrap:anywhere}
 
 /* ---- 逐字稿 ---- */
-.transcript{display:flex;flex-direction:column}
+/* 約 10 句高，超過在區塊內捲動，下方的會議記錄不必滑很久 */
+.transcript{display:flex;flex-direction:column;max-height:65vh;overflow-y:auto;overscroll-behavior:contain;position:relative}
 .line .src{display:inline-block;margin-right:2px;align-self:center;padding:0 5px;border:1px solid var(--line);border-radius:4px;font-size:.7rem;color:var(--muted,#888);vertical-align:1px;white-space:nowrap}
 .line{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
 .line:last-child{border-bottom:0}
@@ -731,13 +732,29 @@ function renderTitle(){const m=curM();$("top-title").textContent=cur?(m.title||"
 
 // ================= 逐字稿 =================
 let playingIdx=-1;
+// 只捲動逐字稿區塊本身，不帶動整個頁面
+function boxScroll(box,el,center){
+  const top=el.offsetTop,h=el.offsetHeight,bh=box.clientHeight,st=box.scrollTop;
+  let to=null;
+  if(center)to=top-(bh-h)/2;else if(top<st)to=top;else if(top+h>st+bh)to=top+h-bh;
+  if(to!==null)box.scrollTo({top:Math.max(0,to),behavior:"smooth"});
+}
+// 高度設為前 10 句的高度（最高 65% 螢幕），超過在區塊內捲動
+const TR_ROWS=10;
+function fitTranscript(){
+  const box=$("transcript"),rows=box.querySelectorAll(".line");
+  if(rows.length<=TR_ROWS){box.style.maxHeight="";return}
+  const r=rows[TR_ROWS-1];if(!r.offsetHeight)return; // 畫面隱藏時量不到，回到會議畫面再算
+  box.style.maxHeight=`min(${r.offsetTop+r.offsetHeight+2}px,65vh)`;
+}
+window.addEventListener("resize",()=>fitTranscript());
 function renderTranscript(){
   const m=curM(),segs=m.segs||[];const box=$("transcript");box.textContent="";playingIdx=-1;
   if(!segs.length){const e=document.createElement("div");e.className="empty";
     e.textContent=cur&&cur.hasAudio?"這場會議還沒有逐字稿。":"開始錄音後，每講完一小段（約 10–20 秒），辨識好的文字會出現在這裡。";box.appendChild(e)}
   segs.forEach((s,i)=>box.appendChild(segRow(s,i)));
   $("seg-count").textContent=segs.length?`${segs.length} 段`:"";
-  $("tr-hint").hidden=!segs.length;
+  $("tr-hint").hidden=!segs.length;fitTranscript();
 }
 const SRC_NAME={gemini:"Gemini",gtx:"Transcribe",local:"本機",groq:"Groq"};
 function segRow(s,i){
@@ -794,7 +811,7 @@ function highlight(){
   const box=$("transcript");
   if(playingIdx>=0){const o=box.querySelector(`.line[data-i="${playingIdx}"]`);o&&o.classList.remove("playing")}
   playingIdx=idx;
-  if(idx>=0){const n=box.querySelector(`.line[data-i="${idx}"]`);if(n){n.classList.add("playing");if($("follow").checked&&!player.paused)n.scrollIntoView({block:"center",behavior:"smooth"})}}
+  if(idx>=0){const n=box.querySelector(`.line[data-i="${idx}"]`);if(n){n.classList.add("playing");if($("follow").checked&&!player.paused)boxScroll(box,n,true)}}
 }
 player.addEventListener("timeupdate",highlight);
 player.addEventListener("seeked",highlight);
@@ -1175,9 +1192,9 @@ async function addSegs(mid,segs){
   m.segs.push(...merged);m.segs.sort((a,b)=>a.s-b.s);await saveM(m);
   if(cur&&cur.id===mid){
     const box=$("transcript");const atEnd=merged.every((x,k)=>m.segs[m.segs.length-merged.length+k]===x);
-    if(atEnd&&box.querySelector(".line")){merged.forEach(x=>box.appendChild(segRow(x,m.segs.indexOf(x))));$("seg-count").textContent=`${m.segs.length} 段`;$("tr-hint").hidden=false}
+    if(atEnd&&box.querySelector(".line")){merged.forEach(x=>box.appendChild(segRow(x,m.segs.indexOf(x))));$("seg-count").textContent=`${m.segs.length} 段`;$("tr-hint").hidden=false;fitTranscript()}
     else renderTranscript();
-    if(R.mid===mid){const last=box.lastElementChild;last&&last.scrollIntoView({block:"nearest",behavior:"smooth"})}
+    if(R.mid===mid){const last=box.lastElementChild;last&&boxScroll(box,last,false)}
   }
 }
 
@@ -1288,7 +1305,7 @@ $("btn-share").onclick=async()=>{const m=curM();
 
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
-  if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else renderTitle()}
+  if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else{renderTitle();fitTranscript()}}
 $("btn-settings").onclick=()=>{showView("settings");renderSync();renderRecInfo();renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
 const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"],["s-recMode","recMode"],["s-recFormat","recFormat"],["s-recKbps","recKbps"]];
