@@ -119,6 +119,14 @@ details.info[open] summary{margin-bottom:12px}
 .meter{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;border:1px solid var(--line)}
 .meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s linear}
 audio{width:100%;height:40px}
+/* 播放列常駐在畫面上方，壓成兩行，不要占太多版面 */
+#playbar{padding:8px 12px;gap:2px}
+.playrow{display:flex;align-items:center;gap:4px;min-width:0}
+.playrow .toggle{white-space:nowrap;font-size:.8rem}
+.playrow .btn-ghost{padding:4px 6px;font-size:.85rem;white-space:nowrap}
+#play-note{flex:1;min-width:0;font-size:.75rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+#play-note.full{white-space:normal}
+#au-status:empty{display:none}
 .toggle{display:flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}
 .toggle input{width:auto}
 .grid .toggle.full{grid-column:1/-1}
@@ -148,7 +156,7 @@ audio{width:100%;height:40px}
 /* 約 10 句高，超過在區塊內捲動，下方的會議記錄不必滑很久 */
 .transcript{display:flex;flex-direction:column;max-height:65vh;overflow-y:auto;overscroll-behavior:contain;position:relative}
 .line .src{display:inline-block;margin-right:2px;align-self:center;padding:0 5px;border:1px solid var(--line);border-radius:4px;font-size:.7rem;color:var(--muted,#888);vertical-align:1px;white-space:nowrap}
-.line{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
+.line{display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
 .line:last-child{border-bottom:0}
 .line.key .txt{background:var(--accent-soft)}
 .line.playing{background:var(--play)}
@@ -156,7 +164,9 @@ audio{width:100%;height:40px}
 .txt{min-width:0;overflow-wrap:anywhere;border-radius:4px;padding:0 4px}
 .txt[contenteditable="true"]{outline:2px solid var(--accent);cursor:text;background:var(--bg)}
 .acts{display:flex}
-.acts button{padding:2px 6px;font-size:.85rem}
+.acts button{padding:2px 4px;font-size:.85rem}
+.tcol{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
+.tcol .src{margin:0;align-self:flex-start}
 .empty{color:var(--muted);font-size:.9rem;padding:8px 0}
 .pending{font-size:.85rem;color:var(--warn);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
@@ -234,16 +244,13 @@ audio{width:100%;height:40px}
 
         <section class="panel dock" id="playbar" aria-label="錄音播放" hidden>
           <audio id="player" controls preload="metadata" controlsList="nodownload"></audio>
-          <div class="headrow">
-            <label class="toggle"><input type="checkbox" id="follow" checked> 播放時自動捲動到目前段落</label>
-            <span class="spacer"></span>
-            <span class="note" id="play-note"></span>
+          <div class="playrow">
+            <label class="toggle" title="播放時自動捲動到目前段落"><input type="checkbox" id="follow" checked> 自動捲動</label>
+            <span class="note" id="play-note" title="點一下看完整資訊"></span>
+            <button class="btn-ghost" id="au-save" title="存到手機（文件／會議速記／錄音）">存檔</button>
+            <button class="btn-ghost" id="au-share" title="分享錄音">分享</button>
           </div>
-          <div class="headrow" style="justify-content:flex-end;margin-top:4px">
-            <span class="note" id="au-status" style="flex:1;min-width:0"></span>
-            <button class="btn-ghost" id="au-save">存到手機</button>
-            <button class="btn-ghost" id="au-share">分享錄音</button>
-          </div>
+          <p class="note" id="au-status"></p>
         </section>
 
         <section class="panel" aria-labelledby="h-tr">
@@ -765,8 +772,9 @@ function segRow(s,i){
   const ed=document.createElement("button");ed.className="btn-ghost";ed.textContent="✎";ed.title="修改";ed.setAttribute("aria-label","修改此段");
   const st=document.createElement("button");st.className="btn-ghost";st.textContent=s.key?"★":"☆";st.title="標記重點";st.setAttribute("aria-label","標記重點");
   const dl=document.createElement("button");dl.className="btn-ghost";dl.textContent="✕";dl.title="刪除此段";dl.setAttribute("aria-label","刪除此段");
-  acts.append(ed,st,dl);row.append(ts,tx,acts);
-  if(s.src){const sb=document.createElement("span");sb.className="src";sb.textContent=SRC_NAME[s.src]||s.src;sb.title="辨識來源";acts.prepend(sb)}
+  const tcol=document.createElement("div");tcol.className="tcol";tcol.append(ts);
+  acts.append(ed,st,dl);row.append(tcol,tx,acts);
+  if(s.src){const sb=document.createElement("span");sb.className="src";sb.textContent=SRC_NAME[s.src]||s.src;sb.title="辨識來源";tcol.append(sb)}
   row.addEventListener("click",e=>{if(e.target.closest(".acts")||tx.isContentEditable)return;seekTo(s.s)});
   ed.onclick=()=>{tx.contentEditable="true";tx.focus();const r=document.createRange();r.selectNodeContents(tx);r.collapse(false);const sel=getSelection();sel.removeAllRanges();sel.addRange(r)};
   tx.addEventListener("blur",async()=>{if(!tx.isContentEditable)return;tx.contentEditable="false";const v=tx.textContent.trim();const m=curM();
@@ -1307,6 +1315,7 @@ $("btn-share").onclick=async()=>{const m=curM();
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
   if(v==="settings"||v==="backup"){$("top-title").textContent=v==="settings"?"設定":"備份與還原";$("btn-delete").hidden=true}else{renderTitle();fitTranscript()}}
 $("btn-settings").onclick=()=>{showView("settings");renderSync();renderRecInfo();renderCatSettings();renderGemModels();refreshLocal();renderGtxDebug();if(cfg.gemKey&&Date.now()-(cfg.gemModelsAt||0)>3600000)syncGemModels(false);closeSide()};
+$("play-note").onclick=e=>e.currentTarget.classList.toggle("full");
 $("btn-settings-done").onclick=()=>{showView("meeting");renderAll();pump()};
 const SET=[["s-sttEngine","sttEngine"],["s-gemKey","gemKey"],["s-groq","groqKey"],["s-stt","stt"],["s-vocab","vocab"],["s-minEngine","minEngine"],["s-anth","anthKey"],["s-model","model"],["s-auto","auto"],["s-keepScreen","keepScreen"],["s-gemThink","gemThink"],["s-recMode","recMode"],["s-recFormat","recFormat"],["s-recKbps","recKbps"]];
 const DEF={gemModel:"gemini-3.8-flash",model:"claude-sonnet-5-5",sttEngine:"gemini",minEngine:"gemini"};
