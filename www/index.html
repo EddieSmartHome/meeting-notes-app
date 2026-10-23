@@ -156,6 +156,14 @@ audio{width:100%;height:40px}
 /* 約 10 句高，超過在區塊內捲動，下方的會議記錄不必滑很久 */
 .transcript{display:flex;flex-direction:column;max-height:65vh;overflow-y:auto;overscroll-behavior:contain;position:relative}
 .line .src{display:inline-block;margin-right:2px;align-self:center;padding:0 5px;border:1px solid var(--line);border-radius:4px;font-size:.7rem;color:var(--muted,#888);vertical-align:1px;white-space:nowrap}
+/* 逐字稿／會議記錄分頁 */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:-4px}
+.tabs button{flex:1;background:transparent;border:0;border-bottom:3px solid transparent;border-radius:0;padding:8px 4px;font-weight:700;color:var(--muted)}
+.tabs button[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-n{font-weight:400;font-size:.8rem;margin-left:6px}
+.tr-tools{display:flex;align-items:center;gap:4px;min-width:0}
+.tr-tools select{flex:1;min-width:0;width:auto;padding-top:6px;padding-bottom:6px}
+.tr-tools .btn-ghost{white-space:nowrap;padding:6px}
 .line{display:grid;grid-template-columns:auto 1fr auto;gap:6px;align-items:start;padding:8px 6px;border-bottom:1px solid var(--line);border-radius:6px;cursor:pointer}
 .line:last-child{border-bottom:0}
 .line.key .txt{background:var(--accent-soft)}
@@ -253,27 +261,25 @@ audio{width:100%;height:40px}
           <p class="note" id="au-status"></p>
         </section>
 
-        <section class="panel" aria-labelledby="h-tr">
-          <div class="headrow">
-            <h2 id="h-tr">逐字稿</h2>
-            <span class="note" id="seg-count"></span>
-          </div>
-          <div class="headrow" style="margin-top:8px">
-            <label class="note" for="tr-engine" style="white-space:nowrap">辨識方式</label>
-            <select id="tr-engine" style="flex:1;min-width:0;width:auto"></select>
-          </div>
-          <div class="headrow" style="margin-top:4px;justify-content:flex-end">
-            <button class="btn-ghost" id="btn-undo-retr" hidden>復原上一版</button>
-            <button class="btn-ghost" id="btn-retr" hidden>用這個方式重新轉錄</button>
+        <div class="tabs" role="tablist" aria-label="逐字稿與會議記錄">
+          <button role="tab" id="tab-tr" aria-controls="sec-tr" aria-selected="true">逐字稿<span class="tab-n" id="seg-count"></span></button>
+          <button role="tab" id="tab-min" aria-controls="sec-min" aria-selected="false">會議記錄<span class="tab-n" id="min-mark"></span></button>
+        </div>
+
+        <section class="panel" id="sec-tr" role="tabpanel" aria-labelledby="tab-tr">
+          <div class="tr-tools">
+            <label for="tr-engine" hidden>辨識方式</label>
+            <select id="tr-engine" title="辨識方式"></select>
+            <button class="btn-ghost" id="btn-undo-retr" hidden>復原</button>
+            <button class="btn-ghost" id="btn-retr" title="用這個方式重新轉錄整場錄音" hidden>重新轉錄</button>
           </div>
           <div class="pending" id="pending" hidden></div>
           <div class="transcript" id="transcript"></div>
           <p class="note" id="tr-hint">點任一段文字即從該處播放錄音；✎ 修改辨識錯字，☆ 標記重點。</p>
         </section>
 
-        <section class="panel" aria-labelledby="h-min">
+        <section class="panel" id="sec-min" role="tabpanel" aria-labelledby="tab-min" hidden>
           <div class="headrow">
-            <h2 id="h-min">會議記錄</h2>
             <span class="spacer"></span>
             <label class="label" for="out-lang">輸出語言</label>
             <select id="out-lang" style="width:auto">
@@ -676,12 +682,12 @@ $("btn-menu").onclick=openSide;$("scrim").onclick=closeSide;
 
 $("btn-new").onclick=()=>{
   if(R.state!=="idle"){toast("錄音中，請先按「結束」再開新會議");return}
-  cur=null;draft={title:"",date:localNow(),place:"",people:""};showView("meeting");mcatNewShow(false);renderAll();closeSide();$("m-title").focus();
+  cur=null;draft={title:"",date:localNow(),place:"",people:""};setTab("tr");showView("meeting");mcatNewShow(false);renderAll();closeSide();$("m-title").focus();
 };
 
 async function openMeeting(id){
   if(R.state!=="idle"&&R.mid!==id){toast("錄音中，請先按「結束」再切換會議");return}
-  cur=meetings.find(m=>m.id===id)||null;showView("meeting");mcatNewShow(false);renderAll();
+  cur=meetings.find(m=>m.id===id)||null;setTab("tr");showView("meeting");mcatNewShow(false);renderAll();
 }
 
 // 刪除（頁內二次確認）
@@ -746,8 +752,8 @@ function boxScroll(box,el,center){
   if(center)to=top-(bh-h)/2;else if(top<st)to=top;else if(top+h>st+bh)to=top+h-bh;
   if(to!==null)box.scrollTo({top:Math.max(0,to),behavior:"smooth"});
 }
-// 高度設為前 10 句的高度（最高 65% 螢幕），超過在區塊內捲動
-const TR_ROWS=10;
+// 高度設為前 5 句的高度（最高 65% 螢幕），超過在區塊內捲動
+const TR_ROWS=5;
 function fitTranscript(){
   const box=$("transcript"),rows=box.querySelectorAll(".line");
   if(rows.length<=TR_ROWS){box.style.maxHeight="";return}
@@ -863,7 +869,7 @@ async function recStart(){
   R.main.onstop=()=>finalize(m);
   R.main.start(3000);
   try{R.ctx=new (window.AudioContext||window.webkitAudioContext)();const src=R.ctx.createMediaStreamSource(R.stream);R.an=R.ctx.createAnalyser();R.an.fftSize=2048;src.connect(R.an);R.buf=new Float32Array(R.an.fftSize)}catch(e){R.an=null}
-  R.base=0;R.resumedAt=performance.now();R.state="recording";R.silentMs=0;
+  R.base=0;R.resumedAt=performance.now();R.state="recording";R.silentMs=0;setTab("tr");
   segStart();
   R.vad=setInterval(vadTick,100);
   R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);
@@ -1264,14 +1270,14 @@ async function generate(m){
       const {r,data,text}=await gemini([{text:buildPrompt(m)}],null,300000);
       if(!r.ok)throw gemErr(r,data,"產生");
       if(!text)throw new Error("Gemini 沒有回傳內容，請再試一次");
-      m.minutes=text;await saveM(m);return;
+      m.minutes=text;await saveM(m);if(cur===m)setTab("min");return;
     }
     const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
       headers:{"content-type":"application/json","x-api-key":cfg.anthKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
       body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:8000,messages:[{role:"user",content:buildPrompt(m)}]})});
     const data=await r.json().catch(()=>({}));
     if(!r.ok){const msg=(data.error&&data.error.message)||("HTTP "+r.status);throw new Error(r.status===401?"Anthropic 金鑰無效，請到設定重新填入。":r.status===404?"找不到模型「"+cfg.model+"」，請到設定確認。":msg)}
-    m.minutes=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");await saveM(m);
+    m.minutes=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");await saveM(m);if(cur===m)setTab("min");
   }catch(e){if(cur===m){err.textContent="產生失敗："+(e.message||e);err.hidden=false}}
   finally{genBusy=false;btn.disabled=false;btn.textContent=cur&&cur.minutes?"重新產生":"產生會議記錄";if(cur===m)renderMinutes()}
 }
@@ -1281,8 +1287,12 @@ async function maybeAuto(mid){
   meetings.filter(m=>m.status==="done"&&!m.minutes&&m.segs.length&&!m.autoTried&&(!mid||m.id===mid)&&!all.some(c=>c.mid===m.id)).slice(0,1).forEach(async m=>{m.autoTried=true;await saveM(m);generate(m)});
 }
 $("btn-gen").onclick=()=>generate();
+// 分頁：逐字稿／會議記錄
+let tab="tr";
+function setTab(t){tab=t;["tr","min"].forEach(k=>{$("tab-"+k).setAttribute("aria-selected",String(k===t));$("sec-"+k).hidden=k!==t});if(t==="tr")fitTranscript()}
+$("tab-tr").onclick=()=>setTab("tr");$("tab-min").onclick=()=>setTab("min");
 function renderMinutes(){
-  const m=curM();
+  const m=curM();$("min-mark").textContent=m.minutes?"✓":"";
   $("btn-gen").textContent=m.minutes?"重新產生":"產生會議記錄";
   if(!m.minutes){$("minutes").innerHTML='<p class="note">錄音與轉錄完成後按「產生會議記錄」。也可按「複製提示詞」貼到 Claude App 整理。</p>';$("btn-copy").hidden=$("btn-share").hidden=true;return}
   $("minutes").innerHTML=md(m.minutes);$("btn-copy").hidden=false;$("btn-share").hidden=false;
