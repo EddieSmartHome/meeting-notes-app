@@ -720,7 +720,10 @@ async function mcatNewSubmit(){
 $("mcat-new-ok").onclick=mcatNewSubmit;
 $("mcat-new-cancel").onclick=()=>mcatNewShow(false);
 $("mcat-new-name").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();mcatNewSubmit()}else if(e.key==="Escape")mcatNewShow(false)});
-function renderInfo(){const m=curM();FIELDS.forEach(k=>{$("m-"+k).value=m[k]||""});renderCatSelects();
+// 同步在輸入中途更新畫面時，不覆蓋正在輸入的欄位
+let infoMid=null;
+function renderInfo(){const m=curM(),same=infoMid===(cur&&cur.id);infoMid=cur&&cur.id;
+  FIELDS.forEach(k=>{const el=$("m-"+k);if(!(same&&cur&&document.activeElement===el))el.value=m[k]||""});renderCatSelects();
   const c=catOf(m);
   const sum=[c?c.name:"",dateLabel(m.date),m.people].filter(Boolean).join("・");$("info-sum").textContent=sum?"　"+sum:"";
   $("info-box").open=!cur||!(cur.segs&&cur.segs.length)}
@@ -1790,8 +1793,10 @@ async function runSync(manual){
         let res=rm,localNewer=false;
         if(m){
           res=Object.assign({},m);res.ft=Object.assign({},m.ft||{});
-          SYNC_FIELDS.forEach(k=>{const rt=(rm.ft&&rm.ft[k])||rm.updatedAt||0,lt=(m.ft&&m.ft[k])||m.updatedAt||0;
-            if(rt>lt){res[k]=rm[k];res.ft[k]=rt}else if(lt>rt&&JSON.stringify(m[k])!==JSON.stringify(rm[k]))localNewer=true});
+          // v2.4.0 之前建立的會議，沒改過的欄位沒有修改時間：只有一邊有時間就以那邊為準，兩邊都沒有才比整場的更新時間
+          SYNC_FIELDS.forEach(k=>{const rf=rm.ft&&rm.ft[k],lf=m.ft&&m.ft[k];
+            const rt=rf||(lf?0:rm.updatedAt||0),lt=lf||(rf?0:m.updatedAt||0);
+            if(rt>lt){res[k]=rm[k];if(rf)res.ft[k]=rf}else if(lt>rt&&JSON.stringify(m[k])!==JSON.stringify(rm[k]))localNewer=true});
           res.updatedAt=Math.max(m.updatedAt||0,rm.updatedAt||0);
         }
         res.su=ru;
