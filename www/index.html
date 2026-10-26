@@ -523,6 +523,8 @@ const NATIVE=!!(CAP&&CAP.isNativePlatform&&CAP.isNativePlatform());
 const PL=(CAP&&CAP.Plugins)||{};
 const APP_VERSION="__APP_VERSION__"; // 編譯時由 VERSION 檔填入
 const APP_REPO="__APP_REPO__"; // 編譯時填入 GitHub repo
+const OLD_REPO="hsueddiese/meeting-notes-app"; // 帳號改名前的 repo：先試舊的，抓不到再用 APP_REPO
+const repoList=()=>APP_REPO.startsWith("__")?[]:[...new Set([OLD_REPO,APP_REPO])];
 const toTW=(window.OpenCC&&OpenCC.Converter)?OpenCC.Converter({from:"cn",to:"twp"}):(s=>s);
 
 // ================= 設定 =================
@@ -1503,7 +1505,10 @@ if(LA){
     $("local-fill").style.width=Math.min(100,got/all*100)+"%";$("local-status").textContent=`模型下載中…（第 ${p.index+1}/${p.count} 個檔案，共約 ${Math.round(got/1048576)} MB）`})}catch(e){}
   $("local-dl").onclick=async()=>{
     localSt.downloading=true;renderLocal();$("local-bar").hidden=false;
-    try{const r=await LA.download({base:/^__/.test(APP_REPO)?"":`https://github.com/${APP_REPO}/releases/download/local-asr-v1/`});Object.assign(localSt,r);toast("模型下載完成");if(cfg.localMode==="off"){cfg.localMode="fallback";saveCfg()}retryAll()}
+    try{const repos=repoList();let r,err;
+      if(!repos.length)r=await LA.download({base:""});
+      for(const repo of repos){try{r=await LA.download({base:`https://github.com/${repo}/releases/download/local-asr-v1/`});break}catch(e){err=e}}
+      if(!r)throw err;Object.assign(localSt,r);toast("模型下載完成");if(cfg.localMode==="off"){cfg.localMode="fallback";saveCfg()}retryAll()}
     catch(e){toast(e.message||"下載失敗");}
     finally{localSt.downloading=false;await refreshLocal()}
   };
@@ -1576,14 +1581,18 @@ $("cat-new-name").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDe
 let updInfo=null;
 function cmpVer(a,b){const pa=String(a).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0),pb=String(b).replace(/^v/,"").split(".").map(n=>parseInt(n,10)||0);for(let i=0;i<Math.max(pa.length,pb.length);i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d>0?1:-1}return 0}
 const curVer=()=>APP_VERSION.startsWith("__")?"0.0.0":APP_VERSION;
-const repoName=()=>APP_REPO.startsWith("__")?"":APP_REPO;
 function updShow(){$("upd").hidden=false}
 function updMsg(t){$("upd-msg").textContent=t}
 function updReset(){["upd-notes","upd-meter","upd-hint","upd-install","upd-link"].forEach(id=>$(id).hidden=true);$("upd-install").disabled=false;$("upd-bar").style.width="0"}
 $("upd-close").onclick=()=>{$("upd").hidden=true};
 async function fetchLatest(){
-  const repo=repoName();
-  if(!repo)throw new Error("開發版無法檢查更新。");
+  const repos=repoList();
+  if(!repos.length)throw new Error("開發版無法檢查更新。");
+  let err;
+  for(const repo of repos){try{return await fetchLatestFrom(repo)}catch(e){err=e}}
+  throw err;
+}
+async function fetchLatestFrom(repo){
   let r;
   try{r=await fetch(`https://api.github.com/repos/${repo}/releases/latest`,{headers:{"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"}})}
   catch(e){throw new Error("網路連線失敗，請確認網路後再試。")}
@@ -2062,7 +2071,7 @@ async function migrateV1(){
   if(!sttReady()&&!meetings.length){status("第一次使用：請先到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰")}
   window.addEventListener("online",()=>{retryAll()});
   document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")retryAll()});
-  if(repoName())setTimeout(()=>checkUpdate(false),2500); // 每次開啟 App 都檢查
+  if(repoList().length)setTimeout(()=>checkUpdate(false),2500); // 每次開啟 App 都檢查
 })();
 })();
 </script>
