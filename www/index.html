@@ -190,6 +190,7 @@ audio{width:100%;height:40px}
 .minutes table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.5em 0}
 .minutes th,.minutes td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
 .minutes th{background:var(--bg)}
+#min-edit{min-height:55vh;font-family:var(--font-mono);font-size:.85rem;line-height:1.5}
 .confirm-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:.88rem;z-index:60;max-width:90vw}
 </style>
@@ -280,6 +281,8 @@ audio{width:100%;height:40px}
 
         <section class="panel" id="sec-min" role="tabpanel" aria-labelledby="tab-min" hidden>
           <div class="headrow">
+            <button class="btn-ghost" id="btn-edit-min" title="手動修改會議記錄">編輯</button>
+            <button class="btn-ghost" id="btn-undo-min" title="切回修改或重新產生前的內容" hidden>復原</button>
             <span class="spacer"></span>
             <label class="label" for="out-lang">輸出語言</label>
             <select id="out-lang" style="width:auto">
@@ -297,6 +300,11 @@ audio{width:100%;height:40px}
           </div>
           <div class="err" id="gen-err" hidden></div>
           <div class="minutes" id="minutes"></div>
+          <div id="min-editor" hidden>
+            <textarea id="min-edit" aria-label="編輯會議記錄" spellcheck="false"></textarea>
+            <p class="note">格式：「## 標題」、「- 項目」、「| 欄位 | 欄位 |」表格、「**粗體**」。</p>
+            <div class="confirm-row"><button class="btn-primary" id="min-save">儲存</button><button id="min-cancel">取消</button></div>
+          </div>
         </section>
       </div>
 
@@ -579,7 +587,7 @@ const curM=()=>cur||draft;
 function newMeetingObj(){return{id:uid(),title:draft.title,date:draft.date||localNow(),place:draft.place,people:draft.people,cat:draft.cat||(cfg.catFilter&&cfg.catFilter!=="none"?cfg.catFilter:""),segs:[],minutes:"",duration:0,mime:"",hasAudio:false,status:"new",createdAt:Date.now(),updatedAt:Date.now()}}
 async function ensureMeeting(){if(cur)return cur;cur=newMeetingObj();meetings.unshift(cur);await saveM(cur);renderList();return cur}
 // 每個欄位記錄最後修改時間（m.ft），同步時逐欄位以較新的為準，避免兩台各改不同欄位時互相蓋掉
-const SYNC_FIELDS=["title","date","place","people","cat","segs","minutes","duration","mime","hasAudio","status","recInfo","createdAt"];
+const SYNC_FIELDS=["title","date","place","people","cat","segs","minutes","minPrev","minEdited","minPrevEdited","duration","mime","hasAudio","status","recInfo","createdAt"];
 const mSnap=new Map();
 function snapOf(m){const o={};SYNC_FIELDS.forEach(f=>{o[f]=JSON.stringify(m[f]===undefined?null:m[f])});return o}
 async function saveM(m){
@@ -1257,46 +1265,65 @@ ${tpl}
 ## 逐字稿
 ${lines}`;
 }
-let genBusy=false;
+let genBusy=false,genArm=null;
+function disarmGen(){if(genArm){clearTimeout(genArm);genArm=null}const b=$("btn-gen");b.classList.remove("btn-rec");if(!genBusy)b.textContent=cur&&cur.minutes?"重新產生":"產生會議記錄"}
+// 換掉會議記錄時保留上一版，「復原」可互換；edited 表示目前內容是手動修改的
+function setMinutes(m,text,edited){if(m.minutes&&m.minutes!==text){m.minPrev=m.minutes;m.minPrevEdited=!!m.minEdited}m.minutes=text;m.minEdited=edited}
 async function generate(m){
   m=m||cur;const err=$("gen-err");if(cur===m)err.hidden=true;
   if(!m||!m.segs.length){err.textContent="逐字稿是空的。";err.hidden=false;return}
   if(!minReady()){err.textContent=(cfg.minEngine==="claude"?"尚未設定 Anthropic API 金鑰":"尚未設定 Gemini API 金鑰")+"（左側選單 → 設定），或改按「複製提示詞」貼到 Claude App。";err.hidden=false;return}
-  if(genBusy)return;genBusy=true;
-  const btn=$("btn-gen");btn.disabled=true;btn.textContent="整理中…";
+  if(genBusy)return;
+  const btn=$("btn-gen");
+  if(cur===m&&m.minutes&&m.minEdited&&!genArm){btn.textContent="再按一次：取代手動修改的內容";btn.classList.add("btn-rec");genArm=setTimeout(disarmGen,4000);return}
+  disarmGen();if(cur===m)closeMinEdit();genBusy=true;btn.disabled=true;btn.textContent="整理中…";
   if(cur===m)$("minutes").innerHTML='<p class="note">正在整理會議記錄，長會議約需 20–60 秒…</p>';
   try{
     if(cfg.minEngine!=="claude"){
       const {r,data,text}=await gemini([{text:buildPrompt(m)}],null,300000);
       if(!r.ok)throw gemErr(r,data,"產生");
       if(!text)throw new Error("Gemini 沒有回傳內容，請再試一次");
-      m.minutes=text;await saveM(m);if(cur===m)setTab("min");return;
+      setMinutes(m,text,false);await saveM(m);if(cur===m)setTab("min");return;
     }
     const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
       headers:{"content-type":"application/json","x-api-key":cfg.anthKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
       body:JSON.stringify({model:cfg.model||"claude-sonnet-5-5",max_tokens:8000,messages:[{role:"user",content:buildPrompt(m)}]})});
     const data=await r.json().catch(()=>({}));
     if(!r.ok){const msg=(data.error&&data.error.message)||("HTTP "+r.status);throw new Error(r.status===401?"Anthropic 金鑰無效，請到設定重新填入。":r.status===404?"找不到模型「"+cfg.model+"」，請到設定確認。":msg)}
-    m.minutes=(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");await saveM(m);if(cur===m)setTab("min");
+    setMinutes(m,(data.content||[]).filter(b=>b.type==="text").map(b=>b.text).join(""),false);await saveM(m);if(cur===m)setTab("min");
   }catch(e){if(cur===m){err.textContent="產生失敗："+(e.message||e);err.hidden=false}}
   finally{genBusy=false;btn.disabled=false;btn.textContent=cur&&cur.minutes?"重新產生":"產生會議記錄";if(cur===m)renderMinutes()}
 }
 async function maybeAuto(mid){
   if(cfg.auto!=="1"||!minReady())return;
   const all=await dbGetAll("chunks");
-  meetings.filter(m=>m.status==="done"&&!m.minutes&&m.segs.length&&!m.autoTried&&(!mid||m.id===mid)&&!all.some(c=>c.mid===m.id)).slice(0,1).forEach(async m=>{m.autoTried=true;await saveM(m);generate(m)});
+  meetings.filter(m=>m.status==="done"&&!m.minutes&&m.segs.length&&!m.autoTried&&minEditId!==m.id&&(!mid||m.id===mid)&&!all.some(c=>c.mid===m.id)).slice(0,1).forEach(async m=>{m.autoTried=true;await saveM(m);generate(m)});
 }
 $("btn-gen").onclick=()=>generate();
 // 分頁：逐字稿／會議記錄
 let tab="tr";
 function setTab(t){tab=t;["tr","min"].forEach(k=>{$("tab-"+k).setAttribute("aria-selected",String(k===t));$("sec-"+k).hidden=k!==t});if(t==="tr")fitTranscript()}
 $("tab-tr").onclick=()=>setTab("tr");$("tab-min").onclick=()=>setTab("min");
+let minEditId=null;
 function renderMinutes(){
   const m=curM();$("min-mark").textContent=m.minutes?"✓":"";
-  $("btn-gen").textContent=m.minutes?"重新產生":"產生會議記錄";
-  if(!m.minutes){$("minutes").innerHTML='<p class="note">錄音與轉錄完成後按「產生會議記錄」。也可按「複製提示詞」貼到 Claude App 整理。</p>';$("btn-copy").hidden=$("btn-share").hidden=true;return}
-  $("minutes").innerHTML=md(m.minutes);$("btn-copy").hidden=false;$("btn-share").hidden=false;
+  if(minEditId&&minEditId!==m.id)closeMinEdit();
+  const editing=!!minEditId;$("min-editor").hidden=!editing;$("minutes").hidden=editing;
+  if(!genBusy&&!genArm)$("btn-gen").textContent=m.minutes?"重新產生":"產生會議記錄";
+  $("btn-edit-min").hidden=editing||genBusy||!cur;$("btn-edit-min").textContent=m.minutes?"編輯":"手動輸入";
+  $("btn-undo-min").hidden=editing||genBusy||!m.minPrev;
+  if(!m.minutes){$("minutes").innerHTML='<p class="note">錄音與轉錄完成後按「產生會議記錄」，或按「手動輸入」自己寫。也可按「複製提示詞」貼到 Claude App 整理。</p>';$("btn-copy").hidden=$("btn-share").hidden=true;return}
+  $("minutes").innerHTML=md(m.minutes)+(m.minEdited?'<p class="note">（已手動修改）</p>':"");$("btn-copy").hidden=editing;$("btn-share").hidden=editing;
 }
+function closeMinEdit(){minEditId=null;$("min-editor").hidden=true;$("minutes").hidden=false}
+$("btn-edit-min").onclick=()=>{const m=cur;if(!m||genBusy)return;disarmGen();minEditId=m.id;$("min-edit").value=m.minutes||"";renderMinutes();$("min-edit").focus()};
+$("min-cancel").onclick=()=>{closeMinEdit();renderMinutes()};
+$("min-save").onclick=async()=>{const m=curM(),v=$("min-edit").value.replace(/\s+$/,"");
+  if(minEditId===m.id&&v!==(m.minutes||"")){setMinutes(m,v,true);if(cur)await saveM(m);toast(v?"已儲存會議記錄":"已清除會議記錄（可按「復原」）")}
+  closeMinEdit();renderMinutes()};
+$("btn-undo-min").onclick=async()=>{const m=curM();if(!m.minPrev)return;
+  const t=m.minutes,e=!!m.minEdited;m.minutes=m.minPrev;m.minEdited=!!m.minPrevEdited;m.minPrev=t||"";m.minPrevEdited=e;
+  if(cur)await saveM(m);renderMinutes();toast("已切回上一版（再按一次可切回）")};
 function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 function inl(s){return esc(s).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>")}
 function md(src){
