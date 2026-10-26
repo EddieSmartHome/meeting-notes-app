@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
 @CapacitorPlugin(name = "LocalAsr")
 public class LocalAsrPlugin extends Plugin {
     // 模型放在本 repo 的 Release「local-asr-v1」（網頁端傳入網址）；沒傳時用這個預設值
-    static final String DEFAULT_BASE = "https://github.com/hsueddiese/meeting-notes-app/releases/download/local-asr-v1/";
+    static final String DEFAULT_BASE = "https://github.com/EddieSmartHome/meeting-notes-app/releases/download/local-asr-v1/";
     static final String[] FILES = {"small-tokens.txt", "small-encoder.int8.onnx", "small-decoder.int8.onnx"};
     static final long NEED_BYTES = 420L * 1024 * 1024;
 
