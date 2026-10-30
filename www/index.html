@@ -841,7 +841,7 @@ player.addEventListener("timeupdate",highlight);
 player.addEventListener("seeked",highlight);
 
 // ================= 錄音 =================
-const R={state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null,buf:null,mime:"",audioIdx:0,base:0,resumedAt:0,silentMs:0,floor:0.004,vad:null,tick:null,puts:[]};
+const R={state:"idle",mid:null,stream:null,main:null,seg:null,cur:null,ctx:null,an:null,buf:null,mime:"",audioIdx:0,base:0,resumedAt:0,silentMs:0,deadMs:0,floor:0.004,vad:null,tick:null,puts:[]};
 function activeTime(){return R.base+(R.state==="recording"?(performance.now()-R.resumedAt)/1000:0)}
 function pickMime(){
   const mp4=["audio/mp4;codecs=mp4a.40.2","audio/mp4"],webm=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
@@ -878,8 +878,8 @@ async function recStart(){
   R.main.ondataavailable=e=>{if(e.data&&e.data.size)R.puts.push(dbPut("audio",{mid:m.id,i:R.audioIdx++,blob:e.data}))};
   R.main.onstop=()=>finalize(m);
   R.main.start(3000);
-  try{R.ctx=new (window.AudioContext||window.webkitAudioContext)();const src=R.ctx.createMediaStreamSource(R.stream);R.an=R.ctx.createAnalyser();R.an.fftSize=2048;src.connect(R.an);R.buf=new Float32Array(R.an.fftSize)}catch(e){R.an=null}
-  R.base=0;R.resumedAt=performance.now();R.state="recording";R.silentMs=0;setTab("tr");
+  try{R.ctx=new (window.AudioContext||window.webkitAudioContext)();const src=R.ctx.createMediaStreamSource(R.stream);R.an=R.ctx.createAnalyser();R.an.fftSize=2048;src.connect(R.an);R.buf=new Float32Array(R.an.fftSize);wakeCtx()}catch(e){R.an=null}
+  R.base=0;R.deadMs=0;R.resumedAt=performance.now();R.state="recording";R.silentMs=0;setTab("tr");
   segStart();
   R.vad=setInterval(vadTick,100);
   R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);
@@ -894,14 +894,19 @@ function segStart(){
   rec.start();R.seg=rec;R.cur=info;
 }
 function cutSeg(restart){if(!R.seg)return;R.cur.end=activeTime();const s=R.seg;R.seg=null;try{s.stop()}catch(e){}if(restart)segStart()}
+// 手機可能把偵測音量用的音訊元件暫停（建立時不在點擊當下、切到背景後），暫停時讀到的音量都是 0
+function wakeCtx(){if(R.ctx&&R.ctx.state!=="running"&&R.ctx.state!=="closed")R.ctx.resume().catch(()=>{})}
 function vadTick(){
-  let rms=0;
-  if(R.an){R.an.getFloatTimeDomainData(R.buf);let sum=0;for(let i=0;i<R.buf.length;i++)sum+=R.buf[i]*R.buf[i];rms=Math.sqrt(sum/R.buf.length)}
-  else rms=0.05; // 無法偵測音量時一律視為有聲，只依時間切段
+  let rms=0,sum=0;
+  if(R.an){R.an.getFloatTimeDomainData(R.buf);for(let i=0;i<R.buf.length;i++)sum+=R.buf[i]*R.buf[i];rms=Math.sqrt(sum/R.buf.length)}
+  // 讀到完全 0（不是安靜，是偵測沒在運作）超過 2 秒：一律視為有聲，只依時間切段，避免整段被當成靜音丟掉
+  if(R.an&&(sum===0||R.ctx.state!=="running")){R.deadMs+=100;if(R.deadMs%1000===0)wakeCtx()}else R.deadMs=0;
+  const blind=!R.an||R.deadMs>=2000;
+  if(!R.an)rms=0.05; // 無法偵測音量時一律視為有聲，只依時間切段
   $("meter").style.width=Math.min(100,rms*900)+"%";
   if(R.state!=="recording"||!R.cur)return;
-  R.floor=rms<R.floor?rms:R.floor*0.998+rms*0.002;
-  const voice=rms>Math.max(0.008,R.floor*3);
+  if(!blind)R.floor=rms<R.floor?rms:R.floor*0.998+rms*0.002;
+  const voice=blind||rms>Math.max(0.008,R.floor*3);
   if(voice){R.cur.voice=true;R.silentMs=0}else R.silentMs+=100;
   const len=activeTime()-R.cur.start;
   if((len>=10&&R.silentMs>=500)||len>=25)cutSeg(true);
@@ -916,7 +921,7 @@ function recPause(){
 function recResume(){
   if(R.state!=="paused")return;
   try{R.main.resume()}catch(e){}
-  R.resumedAt=performance.now();R.state="recording";R.silentMs=0;segStart();
+  R.resumedAt=performance.now();R.state="recording";R.silentMs=0;wakeCtx();segStart();
   R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);keepAwake(true);renderRecUI();status("錄音中");
 }
 function recStop(){
@@ -962,7 +967,7 @@ async function keepAwake(on){
   if(K){try{on?await K.keepAwake():await K.allowSleep()}catch(e){}return}
   try{if(on&&"wakeLock" in navigator)R.wake=await navigator.wakeLock.request("screen");else if(!on&&R.wake){R.wake.release();R.wake=null}}catch(e){}
 }
-document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&R.state==="recording")keepAwake(true)});
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"&&R.state==="recording"){keepAwake(true);wakeCtx()}});
 // 錄音前景服務（原生）：螢幕關閉或切到其他 App 時，Android 才不會把麥克風改成靜音
 let bgRecOn=false;
 async function bgRec(on){
