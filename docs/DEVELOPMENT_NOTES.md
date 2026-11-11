@@ -108,6 +108,7 @@
 
 ## 已處理的事項
 
+- **WebView 退版清掉資料（2026-11-11，v2.5.3）**：使用者手機的 Android System WebView 啟動時當掉、連帶關掉 App；依建議按了 WebView「解除安裝更新」後，WebView 退回舊版會清掉所有 App 的 WebView 資料，IndexedDB 與 localStorage 整個消失，沒同步到雲端硬碟的那場會議遺失。**不可再建議使用者對 WebView 解除安裝更新或清除 App 資料。** 修正：(1) 錄音保險檔：`ondataavailable` 每塊同時以 Filesystem `appendFile` 寫到 `DATA/safe/<mid>/audio.<副檔名>`（App 的 files 目錄，不在 WebView 資料夾），`meeting.json` 在開始錄音、每 30 秒、結束、之後 `saveM`（5 秒去抖動）時更新；啟動時 `safeRecover()` 在資料庫沒有該會議或沒有錄音分塊時，用 `convertFileSrc` 讀回檔案補成 `audio` 分塊；錄音上傳到雲端硬碟（或雲端已有）、刪除會議、同步刪除時移除，資料庫完好且超過 30 天也移除。以無頭 Chrome＋模擬 Filesystem 測過：正常結束與錄音中重載兩種情況，清掉 IndexedDB／localStorage 後都救回。(2) `MainActivity` 處理 `onRenderProcessGone`：銷毀 WebView 後 `recreate()`，一分鐘內第 3 次就提示更新 WebView 並結束，避免無限重開；只經雲端編譯驗證
 - **錄音中音量偵測卡住（2026-10-30，v2.5.2）**：實機錄 28 分鐘課程沒有任何逐字稿、音量條完全不動。原因是偵測音量的 AudioContext 處於暫停狀態，AnalyserNode 讀到全是 0，每段都被判定為無聲而丟棄（完整錄音不受影響）。修正：開始／繼續錄音、回到前景時呼叫 `resume()`；讀值全為 0 或 AudioContext 不在 running 超過 2 秒，改為只依時間切段送出。已用無頭 Chrome 模擬暫停的 AudioContext 驗證：舊版 30 秒內 0 段排入佇列，新版 1 段
 - **簽章問題（2026-10-19 修正）**：原本只把 `signing/debug.keystore` 複製到 `~/.android/`，雲端編譯實際沒用到，每次都產生隨機金鑰，導致每一版簽章不同、無法覆蓋安裝。改為在 `app/build.gradle` 明確指定固定金鑰，並加入「Verify APK signature」步驟，簽章不符就讓編譯失敗。固定金鑰 SHA-256 開頭為 `39:22:B3:F0`。使用者需移除舊版一次（會刪除 App 內資料），之後即可正常更新
 
