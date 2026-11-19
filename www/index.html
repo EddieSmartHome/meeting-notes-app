@@ -567,17 +567,120 @@ function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2
 let tt=null;function toast(t){const el=$("toast");el.textContent=t;el.hidden=false;clearTimeout(tt);tt=setTimeout(()=>el.hidden=true,2400)}
 function status(t){$("status-text").textContent=t}
 
-// ================= IndexedDB =================
-let db=null;
+// ================= 資料儲存 =================
+// v2.6.0 起：會議、待轉錄片段、錄音都存在 App 自己的資料夾（原生外掛 Store，files/store/），不放在 WebView 裡。
+// WebView 當掉、更新、退回舊版都不會清掉資料。舊版 IndexedDB 的資料第一次開啟時複製過來，舊資料庫保留不刪。
+// 沒有原生外掛（電腦瀏覽器測試）時仍用 IndexedDB。
+let db=null;   // 資料庫已就緒（IndexedDB 物件，或檔案模式時為 {files:true}）
+let idb=null;  // 舊的 IndexedDB（搬移資料、或檔案模式不能用時）
+const ST=NATIVE&&PL.Store&&PL.Store.readJsonDir?PL.Store:null;
+let stRoot="",useFiles=false;
 const req=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
 function openDB(){return new Promise((res,rej)=>{const r=indexedDB.open("meeting-notes",1);
   r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore("meetings",{keyPath:"id"});d.createObjectStore("audio",{keyPath:["mid","i"]});d.createObjectStore("chunks",{keyPath:["mid","start"]});};
   r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);})}
-const os=(s,m)=>db.transaction(s,m||"readonly").objectStore(s);
-const dbPut=(s,v)=>req(os(s,"readwrite").put(v));
-const dbGetAll=(s,q)=>req(os(s).getAll(q));
-const dbDel=(s,k)=>req(os(s,"readwrite").delete(k));
-const midRange=mid=>IDBKeyRange.bound([mid,-Infinity],[mid,Infinity]);
+const os=(s,m)=>idb.transaction(s,m||"readonly").objectStore(s);
+const midRange=mid=>({mid});
+const idbRange=q=>q&&q.mid!==undefined?IDBKeyRange.bound([q.mid,-Infinity],[q.mid,Infinity]):q;
+const idbPut=(s,v)=>req(os(s,"readwrite").put(v));
+const idbGetAll=(s,q)=>req(os(s).getAll(idbRange(q)));
+const idbDel=(s,k)=>req(os(s,"readwrite").delete(idbRange(k)));
+// ---- 檔案模式 ----
+const safeId=id=>String(id).replace(/[^A-Za-z0-9_-]/g,"_");
+const ckey=start=>(+start).toFixed(3);
+const extOfType=t=>/wav/.test(t||"")?"wav":/mp4|m4a|aac/.test(t||"")?"m4a":/ogg/.test(t||"")?"ogg":"webm";
+const typeOfName=n=>/\.wav$/.test(n)?"audio/wav":/\.(m4a|mp4)$/.test(n)?"audio/mp4":/\.aac$/.test(n)?"audio/aac":/\.ogg$/.test(n)?"audio/ogg":"audio/webm";
+const stUrl=rel=>CAP.convertFileSrc("file://"+stRoot+"/"+rel);
+async function stBlob(rel,type){const r=await dfetch(stUrl(rel)+"?t="+Date.now());if(!r.ok)throw new Error("讀不到檔案 "+rel);const b=await r.blob();return type&&b.type!==type?new Blob([b],{type}):b}
+// 大檔分段寫入（每段 1.5 MB），先寫暫存檔，完成後才改名，避免留下寫一半的檔案
+async function stWriteBlob(rel,blob){
+  const tmp=rel+".part",CH=3*512*1024;
+  if(!blob.size){await ST.writeB64({path:tmp,data:"",first:true})}
+  for(let off=0;off<blob.size;off+=CH){
+    const data=await blobB64(blob.slice(off,Math.min(off+CH,blob.size)));
+    await ST.writeB64({path:tmp,data,first:off===0,sync:off+CH>=blob.size});
+  }
+  await ST.rename({from:tmp,to:rel});
+}
+async function stList(dir){try{return (await ST.list({dir})).items||[]}catch(e){return[]}}
+const fsdb={
+  async put(s,v){
+    if(s==="meetings")return ST.writeText({path:`meetings/${safeId(v.id)}.json`,data:JSON.stringify(v)});
+    if(s==="audio"){
+      const dir=`audio/${safeId(v.mid)}`,ext=extOfType(v.blob.type);
+      if(v.i===0){for(const f of await stList(dir)){if(/^\d+\./.test(f.name)&&f.name!==`0.${ext}`)await ST.remove({path:`${dir}/${f.name}`})}}
+      return stWriteBlob(`${dir}/${v.i}.${ext}`,v.blob);
+    }
+    if(s==="chunks"){
+      const dir=`chunks/${safeId(v.mid)}`,k=ckey(v.start),o={...v};delete o.blob;
+      if(v.blob&&!v.file){o.file=`${k}.${extOfType(v.blob.type)}`;o.type=v.blob.type||"audio/webm";await stWriteBlob(`${dir}/${o.file}`,v.blob);v.file=o.file;v.type=o.type}
+      return ST.writeText({path:`${dir}/${k}.json`,data:JSON.stringify(o)});
+    }
+  },
+  async getAll(s,q){
+    if(s==="meetings"){const r=await ST.readJsonDir({dir:"meetings",depth:1});return (r.items||[]).map(x=>{try{return JSON.parse(x.data)}catch(e){return null}}).filter(Boolean)}
+    if(s==="chunks"){const r=await ST.readJsonDir({dir:q&&q.mid!==undefined?`chunks/${safeId(q.mid)}`:"chunks",depth:q&&q.mid!==undefined?1:2});
+      return (r.items||[]).map(x=>{try{return JSON.parse(x.data)}catch(e){return null}}).filter(c=>c&&c.mid!==undefined&&(!q||q.mid===undefined||c.mid===q.mid))}
+    if(s==="audio"){const parts=await audioParts(q.mid);const out=[];for(const p of parts)out.push({mid:q.mid,i:p.i,blob:await stBlob(p.rel,p.type)});return out}
+  },
+  async del(s,k){
+    if(s==="meetings")return ST.remove({path:`meetings/${safeId(k)}.json`});
+    if(s==="audio")return ST.remove({path:`audio/${safeId(k.mid)}`});
+    if(s==="chunks"){if(Array.isArray(k))return ST.remove({dir:`chunks/${safeId(k[0])}`,prefix:ckey(k[1])+"."});return ST.remove({path:`chunks/${safeId(k.mid)}`})}
+  }
+};
+const dbPut=(s,v)=>useFiles?fsdb.put(s,v):idbPut(s,v);
+const dbGetAll=(s,q)=>useFiles?fsdb.getAll(s,q):idbGetAll(s,q);
+const dbDel=(s,k)=>useFiles?fsdb.del(s,k):idbDel(s,k);
+// 錄音檔清單（不讀內容）：[{i, rel, type, size}]
+async function audioParts(mid){
+  if(!useFiles){const ps=await idbGetAll("audio",midRange(mid));return ps.map(p=>({i:p.i,blob:p.blob,size:p.blob.size,type:p.blob.type}))}
+  return (await stList(`audio/${safeId(mid)}`)).filter(f=>/^\d+\.\w+$/.test(f.name)&&f.size>0)
+    .map(f=>({i:+f.name.split(".")[0],rel:`audio/${safeId(mid)}/${f.name}`,type:typeOfName(f.name),size:f.size})).sort((a,b)=>a.i-b.i);
+}
+async function hasAudioData(mid){return (await audioParts(mid)).length>0}
+async function chunkBlob(c){if(c.blob)return c.blob;return stBlob(`chunks/${safeId(c.mid)}/${c.file}`,c.type||typeOfName(c.file))}
+
+// 舊資料（IndexedDB）複製到 App 資料夾。全部成功才改用檔案模式；空間不夠或失敗就繼續用舊資料庫，資料不受影響。
+async function migrateToFiles(){
+  const done=await ST.readText({path:"migrated.json"}).catch(()=>({}));
+  if(done&&done.data)return true;
+  let old=null;
+  try{old=await openDB()}catch(e){old=null}
+  if(!old){await ST.writeText({path:"migrated.json",data:JSON.stringify({at:Date.now(),meetings:0})});return true}
+  idb=old;
+  const ms=await idbGetAll("meetings");
+  if(!ms.length){await ST.writeText({path:"migrated.json",data:JSON.stringify({at:Date.now(),meetings:0})});return true}
+  try{
+    const est=await navigator.storage.estimate().catch(()=>({usage:0}));const info=await ST.info();
+    if(info.free&&est.usage&&info.free<est.usage*1.1+100*1048576){status(`手機空間不足，暫時無法把資料搬到新的儲存位置（約需 ${Math.ceil(est.usage/1048576)} MB）。資料仍正常保存在原處。`);return false}
+    for(let n=0;n<ms.length;n++){
+      const m=ms[n];status(`升級資料儲存位置中，請勿關閉 App…（${n+1}/${ms.length}）`);
+      const parts=(await idbGetAll("audio",midRange(m.id))).sort((a,b)=>a.i-b.i);
+      if(parts.length){
+        const blob=new Blob(parts.map(p=>p.blob),{type:(m.mime||parts[0].blob.type||"audio/webm").split(";")[0]});
+        const rel=`audio/${safeId(m.id)}/0.${extOfType(blob.type)}`;
+        await stWriteBlob(rel,blob);
+        const f=(await stList(`audio/${safeId(m.id)}`)).find(x=>`audio/${safeId(m.id)}/${x.name}`===rel);
+        if(!f||f.size!==blob.size)throw new Error("錄音複製後大小不符："+(m.title||m.id));
+      }
+      for(const c of await idbGetAll("chunks",midRange(m.id)))await fsdb.put("chunks",{...c});
+      await fsdb.put("meetings",m);
+    }
+    // 會議已刪除但還留著的片段不搬
+    await ST.writeText({path:"migrated.json",data:JSON.stringify({at:Date.now(),meetings:ms.length,from:"indexeddb"})});
+    status("");return true;
+  }catch(e){
+    console.warn("搬移失敗",e);status("資料搬移未完成（"+(e.message||e)+"），這次先沿用原本的資料，下次開啟會再試。");
+    return false;
+  }
+}
+async function openStorage(){
+  if(ST){
+    try{stRoot=(await ST.info()).root;if(await migrateToFiles()){useFiles=true;db={files:true};return}}catch(e){console.warn("檔案模式無法使用",e)}
+  }
+  idb=idb||await openDB();db=idb;
+}
 
 // ================= 狀態 =================
 let meetings=[];          // 記憶體中的會議清單
@@ -589,7 +692,7 @@ const curM=()=>cur||draft;
 function newMeetingObj(){return{id:uid(),title:draft.title,date:draft.date||localNow(),place:draft.place,people:draft.people,cat:draft.cat||(cfg.catFilter&&cfg.catFilter!=="none"?cfg.catFilter:""),segs:[],minutes:"",duration:0,mime:"",hasAudio:false,status:"new",createdAt:Date.now(),updatedAt:Date.now()}}
 async function ensureMeeting(){if(cur)return cur;cur=newMeetingObj();meetings.unshift(cur);await saveM(cur);renderList();return cur}
 // 每個欄位記錄最後修改時間（m.ft），同步時逐欄位以較新的為準，避免兩台各改不同欄位時互相蓋掉
-const SYNC_FIELDS=["title","date","place","people","cat","segs","minutes","minPrev","minEdited","minPrevEdited","duration","mime","hasAudio","status","recInfo","createdAt"];
+const SYNC_FIELDS=["title","date","place","people","cat","segs","minutes","minPrev","minEdited","minPrevEdited","duration","mime","hasAudio","status","recInfo","createdAt","audioAt"];
 const mSnap=new Map();
 function snapOf(m){const o={};SYNC_FIELDS.forEach(f=>{o[f]=JSON.stringify(m[f]===undefined?null:m[f])});return o}
 async function saveM(m){
@@ -804,9 +907,10 @@ function segRow(s,i){
 // ================= 播放與同步 =================
 const player=$("player");let audioURL=null,audioFor=null;
 async function getAudioBlob(m){
-  const parts=(await dbGetAll("audio",midRange(m.id))).sort((a,b)=>a.i-b.i);
+  const parts=await audioParts(m.id);
   if(!parts.length)return null;
-  let blob=new Blob(parts.map(p=>p.blob),{type:(m.mime||parts[0].blob.type||"audio/webm").split(";")[0]});
+  const blobs=[];for(const p of parts)blobs.push(p.blob||await stBlob(p.rel,p.type));
+  let blob=new Blob(blobs,{type:(useFiles&&parts[0].type!=="audio/webm"?parts[0].type:(m.mime||parts[0].type||"audio/webm")).split(";")[0]});
   if(/webm/.test(blob.type)&&m.duration&&window.ysFixWebmDuration){try{blob=await ysFixWebmDuration(blob,Math.round(m.duration*1000),{logger:false})}catch(e){}}
   return blob;
 }
@@ -863,6 +967,7 @@ function renderRecInfo(){
 }
 
 async function recStart(){
+  if(recNative())return recStartNative();
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){status("這個裝置不支援錄音。");return}
   const m=await ensureMeeting();
   if(m.hasAudio){toast("這場會議已有錄音，請按「＋ 新會議」開始另一場");return}
@@ -914,18 +1019,24 @@ function vadTick(){
 }
 function recPause(){
   if(R.state!=="recording")return;
+  if(R.native){const t=activeTime();R.state="paused";R.base=t;RS.pauseRec().then(st=>{if(st&&st.active&&R.state==="paused")R.base=st.elapsed}).catch(()=>{});
+    clearInterval(R.tick);$("timer").textContent=fmt(t);$("meter").style.width="0";keepAwake(false);renderRecUI();status("已暫停");return}
   const t=activeTime();cutSeg(false);R.state="paused";R.base=t;
   try{R.main.pause()}catch(e){}
   clearInterval(R.tick);$("timer").textContent=fmt(t);keepAwake(false);renderRecUI();status("已暫停");
 }
 function recResume(){
   if(R.state!=="paused")return;
+  if(R.native){RS.resumeRec().catch(()=>{});R.resumedAt=performance.now();R.state="recording";
+    R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);keepAwake(true);renderRecUI();status("錄音中");return}
   try{R.main.resume()}catch(e){}
   R.resumedAt=performance.now();R.state="recording";R.silentMs=0;wakeCtx();segStart();
   R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);keepAwake(true);renderRecUI();status("錄音中");
 }
 function recStop(){
   if(R.state==="idle")return;
+  if(R.native){const m=meetings.find(x=>x.id===R.mid);if(R.state==="recording")recPause();R.state="stopping";renderRecUI();status("正在保存錄音…");
+    RS.stopRec().then(r=>finalizeNative(m,r&&r.duration)).catch(e=>finalizeNative(m,0,e.message||String(e)));return}
   if(R.state==="recording")recPause();
   R.state="stopping";renderRecUI();status("正在保存錄音…");
   try{R.main.stop()}catch(e){finalize(meetings.find(m=>m.id===R.mid))}
@@ -947,19 +1058,78 @@ async function finalize(m){
 $("btn-rec").onclick=()=>{if(R.state==="idle")recStart();else if(R.state==="recording")recPause();else if(R.state==="paused")recResume()};
 $("btn-stop").onclick=recStop;
 
+// ---- 原生錄音（v2.6.0）：錄音在 Android 的前景服務裡進行，不受畫面（WebView）重新載入影響 ----
+const RS=PL.RecordingService;
+const recNative=()=>!!(useFiles&&RS&&RS.startRec);
+async function recStartNative(){
+  const m=await ensureMeeting();
+  const cont=!!m.hasAudio;
+  if(cont&&!/mp4|m4a|aac/.test(m.mime||"")){toast("這場會議的舊錄音格式無法接續錄音，請按「＋ 新會議」另開一場");return}
+  status(cont?"準備接著錄音…":"啟動麥克風…");
+  const kbps=+cfg.recKbps||64,mode=cfg.recMode||"meeting";
+  let res;
+  try{res=await RS.startRec({mid:m.id,kbps,mode,text:"錄音中，螢幕關閉或切到其他 App 也會持續錄音"})}
+  catch(e){status("無法開始錄音："+(e.message||e));return}
+  Object.assign(R,{native:true,mid:m.id,mime:"audio/mp4",base:res.base||0,resumedAt:performance.now(),state:"recording"});
+  m.mime="audio/mp4";m.status="recording";m.hasAudio=true;if(!m.date)m.date=localNow();
+  m.recInfo={mime:"audio/mp4",kbps,mode,sr:res.sampleRate,native:true};lsSet("last-rec-info",m.recInfo);
+  await saveM(m);
+  if(audioFor===m.id){try{player.pause()}catch(e){}audioFor=null}
+  setTab("tr");recTicking();keepAwake(true);renderRecUI();renderList();loadPlayer();
+  status((cont?"接著錄音中。":"錄音中。")+(sttReady()?"講完一段後文字會陸續出現；切到其他 App 也會繼續錄":`尚未設定 ${sttName()} 金鑰，錄音會先保存，設定後自動轉錄`));
+}
+function recTicking(){clearInterval(R.tick);R.tick=setInterval(()=>{$("timer").textContent=fmt(activeTime())},500);$("timer").textContent=fmt(activeTime())}
+async function finalizeNative(m,dur,err){
+  clearInterval(R.tick);
+  const t=activeTime();
+  if(m){m.duration=dur>0?Math.round(dur*10)/10:t;m.status="done";m.hasAudio=await hasAudioData(m.id).catch(()=>true);m.mime="audio/mp4";m.audioAt=Date.now();m.audioHave=m.audioAt;await saveM(m)}
+  Object.assign(R,{state:"idle",native:false,mid:null});
+  keepAwake(false);$("meter").style.width="0";audioFor=null;
+  status(err?`錄音已結束：${err}`:`已結束，錄音 ${fmt(m?m.duration:0)}`);
+  renderList();if(cur&&m&&cur.id===m.id){renderRecUI();await loadPlayer();updatePending()}
+  updateStorage();maybeAuto(m&&m.id);
+  if(autoPending)setTimeout(autoInstall,1500);
+}
+// 開啟 App 時：原生錄音還在進行就接回畫面；上次沒收尾的錄音補存成可播放的檔案
+async function recAttach(){
+  if(!recNative())return null;
+  try{
+    RS.addListener("recLevel",e=>{if(R.native&&R.state==="recording")$("meter").style.width=Math.min(100,(e.rms||0)*900)+"%"});
+    RS.addListener("recChunk",()=>{updatePending();pump()});
+    RS.addListener("recStopped",e=>{if(R.native&&R.mid===e.mid&&R.state!=="stopping"){R.state="stopping";finalizeNative(meetings.find(x=>x.id===e.mid),e.duration,e.error)}});
+  }catch(e){}
+  let st={active:false};
+  try{st=await RS.recState()}catch(e){}
+  try{const rp=await RS.recRepair();
+    for(const [mid,d] of Object.entries(rp.items||{})){const m=meetings.find(x=>x.id===mid);if(!m)continue;
+      if(d>0)m.duration=Math.round(d*10)/10;m.hasAudio=true;m.mime="audio/mp4";m.status="done";m.audioAt=Date.now();m.audioHave=m.audioAt;await saveM(m)}
+  }catch(e){}
+  return st&&st.active?st:null;
+}
+function recResumeUI(st){
+  const m=meetings.find(x=>x.id===st.mid);if(!m)return;
+  Object.assign(R,{native:true,mid:m.id,mime:"audio/mp4",base:st.elapsed||0,resumedAt:performance.now(),state:st.paused?"paused":"recording"});
+  if(m.status!=="recording"){m.status="recording";saveM(m)}
+  cur=m;if(R.state==="recording"){recTicking();keepAwake(true)}else $("timer").textContent=fmt(R.base);
+  status(R.state==="recording"?"錄音持續進行中（畫面重新開啟過，錄音沒有中斷）":"已暫停");
+}
+
 function renderRecUI(){
   const m=cur,mine=m&&R.mid===m.id;
   const finished=m&&m.hasAudio&&!mine;
-  $("recbar").hidden=!!finished;
+  const canCont=finished&&recNative()&&R.state==="idle"&&/mp4|m4a|aac/.test(m.mime||"");
+  $("recbar").hidden=!!finished&&!canCont;
   $("recbar").classList.toggle("recording",mine&&R.state==="recording");
   const b=$("btn-rec");
   if(mine&&R.state==="recording"){b.textContent="❚❚ 暫停";b.className=""}
   else if(mine&&R.state==="paused"){b.textContent="● 繼續錄音";b.className="btn-rec"}
+  else if(canCont){b.textContent="● 接著錄音";b.className="btn-rec"}
   else{b.textContent="● 開始錄音";b.className="btn-rec"}
   b.disabled=R.state==="stopping"||(R.state!=="idle"&&!mine);
   $("btn-stop").disabled=!(mine&&(R.state==="recording"||R.state==="paused"));
   renderTrTools();
-  if(!mine&&R.state==="idle"){$("timer").textContent="00:00";if(!finished)status(sttReady()?"按「開始錄音」，中英文會自動辨識":`尚未設定 ${sttName()} 金鑰：可先錄音，設定後自動轉錄（左側選單 → 設定）`)}
+  if(canCont)$("timer").textContent=fmt(m.duration||0);
+  else if(!mine&&R.state==="idle"){$("timer").textContent="00:00";if(!finished)status(sttReady()?"按「開始錄音」，中英文會自動辨識":`尚未設定 ${sttName()} 金鑰：可先錄音，設定後自動轉錄（左側選單 → 設定）`)}
 }
 
 async function keepAwake(on){
@@ -1013,6 +1183,7 @@ async function pump(){
       const all=(await dbGetAll("chunks")).filter(c=>c.tries<3).sort((a,b)=>a.mid===b.mid?a.start-b.start:(a.mid<b.mid?-1:1));
       const c=all.find(x=>x.mid===R.mid)||all[0];if(!c)break;
       try{
+        if(!c.blob){try{c.blob=await chunkBlob(c)}catch(e){console.warn("片段檔案遺失",c);await dbDel("chunks",[c.mid,c.start]);continue}}
         if(c.engine&&c.engine!=="local"){const w=lastCloudAt+RETR_GAP-Date.now();if(w>0)await qSleep(w);lastCloudAt=Date.now()}
         qStart=Date.now();await updatePending();
         let wd;const segs=await Promise.race([transcribe(c),new Promise((_,rej)=>{wd=setTimeout(()=>rej(netErr("timeout",180000)),180000)})]).finally(()=>{clearTimeout(wd);qStart=0});
@@ -1526,7 +1697,7 @@ if(LA){
 }
 $("s-keepScreen").addEventListener("change",()=>{if(R.state==="recording")keepAwake(cfg.keepScreen!=="0")});
 if(NATIVE)document.querySelectorAll(".help a[target]").forEach(a=>a.removeAttribute("target")); // App 內點連結改由系統瀏覽器開啟
-async function updateStorage(){try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
+async function updateStorage(){if(useFiles){$("storage-note").textContent=`${meetings.length} 場會議・資料存在 App 自己的資料夾（不受 WebView 影響）`;return}try{const e=await navigator.storage.estimate();$("storage-note").textContent=`本機已用 ${(e.usage/1048576).toFixed(1)} MB・${meetings.length} 場會議`}catch(e){$("storage-note").textContent=`${meetings.length} 場會議`}}
 
 // ================= 會議分類設定 =================
 const catArm={};
@@ -1704,7 +1875,7 @@ async function safeRecover(){
       const dir=`${SAFE}/${id}`,files=(await FS.readdir({path:dir,directory:"DATA"})).files.map(fname);
       const af=files.find(x=>x.startsWith("audio."));
       let m=meetings.find(x=>x.id===id);
-      if(m&&(await dbGetAll("audio",midRange(id))).length){
+      if(m&&await hasAudioData(id)){
         if(m.status!=="recording"){const st=await FS.stat({path:`${dir}/${af||"meeting.json"}`,directory:"DATA"}).catch(()=>null);
           if(!st||Date.now()-(+st.mtime||0)>30*864e5)await safeDrop(id)}
         continue;
@@ -1760,6 +1931,7 @@ async function buildBackup(onProg){
     if(withAudio&&m.hasAudio){const b=await getAudioBlob(m);if(b){audioFile="錄音."+fileExt(b.type);dir.file(audioFile,b)}}
     if(withAudio){
       const ch=(await dbGetAll("chunks",midRange(m.id))).sort((a,b)=>a.start-b.start);
+      for(const c of ch)if(!c.blob)try{c.blob=await chunkBlob(c)}catch(e){c.blob=new Blob([],{type:c.type||""})}
       ch.forEach((c,i)=>{const fn=`待轉錄/${i+1}.${fileExt(c.blob.type)}`;dir.file(fn,c.blob);pending.push({file:fn,start:c.start,dur:c.dur,type:c.blob.type})});
     }
     if(!audioFile)mj.hasAudio=false;
@@ -1835,7 +2007,7 @@ async function netType(){
   try{if(NET){const s=await NET.getStatus();return s.connected===false?"none":s.connectionType}}catch(e){}
   const c=navigator.connection;return c&&c.type?c.type:"unknown";
 }
-const syncPack=m=>{const o={};for(const k in m)if(k!=="segsPrev"&&k!=="autoTried"&&k!=="su")o[k]=m[k];return o};
+const syncPack=m=>{const o={};for(const k in m)if(k!=="segsPrev"&&k!=="autoTried"&&k!=="su"&&k!=="audioHave")o[k]=m[k];return o};
 function setSyncStatus(t){const el=$("sync-status");if(el)el.textContent=t}
 function syncSummary(){if(!cfg.syncOn)return"尚未啟用。";const t=cfg.syncLast?new Date(cfg.syncLast):null;
   return `已啟用${cfg.syncAccount?`（${cfg.syncAccount}）`:""}・上次同步：${t?`${t.getMonth()+1}/${t.getDate()} ${p2(t.getHours())}:${p2(t.getMinutes())}`:"尚未完成"}`}
@@ -1941,14 +2113,23 @@ async function runSync(manual){
     const net=await netType();
     const audioOK=(net==="wifi"&&cfg.syncAudioWifi)||((net==="cellular"||net==="4g"||net==="3g"||net==="5g")&&cfg.syncAudioCell);
     if(audioOK){
+      // 雲端錄音檔名帶版本（a_<會議>.v<時間>.<副檔名>）：接著錄音後錄音會更新，另一台要知道該重新下載
+      const verOf=f=>{const x=/\.v(\d+)\.[a-z0-9]+$/.exec(f.name);return x?+x[1]:0};
       for(const m of meetings){
-        if(!m.hasAudio||m.status==="recording"||del[m.id])continue;
-        const af=files.find(f=>!f._gone&&f.name.startsWith(`a_${m.id}.`));
-        const parts=await dbGetAll("audio",midRange(m.id));
-        if(parts.length&&!af){setSyncStatus(`上傳錄音中：${m.title||"未命名會議"}…`);const blob=await getAudioBlob(m);if(blob){await gdPutBlob(`a_${m.id}.${fileExt(blob.type)}`,blob);aup++;safeDrop(m.id)}}
-        else if(parts.length&&af)safeDrop(m.id); // 雲端已有錄音：本機保險檔不再需要
-        else if(!parts.length&&af){setSyncStatus(`下載錄音中：${m.title||"未命名會議"}…`);const b=await (await gd(`/files/${af.id}?alt=media`)).blob();
-          await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:(m.mime||b.type||"audio/webm").split(";")[0]})});adown++;if(cur&&cur.id===m.id){audioFor=null;loadPlayer()}}
+        if(!m.hasAudio||m.status==="recording"||(R.state!=="idle"&&R.mid===m.id)||del[m.id])continue;
+        const afs=files.filter(f=>!f._gone&&f.name.startsWith(`a_${m.id}.`));
+        const want=m.audioAt||0,have=m.audioHave||0;
+        const af=afs.find(f=>verOf(f)===want)||null;
+        const parts=await audioParts(m.id);
+        if(parts.length&&have===want&&!af){
+          setSyncStatus(`上傳錄音中：${m.title||"未命名會議"}…`);const blob=await getAudioBlob(m);
+          if(blob){await gdPutBlob(want?`a_${m.id}.v${want}.${fileExt(blob.type)}`:`a_${m.id}.${fileExt(blob.type)}`,blob);aup++;safeDrop(m.id);
+            for(const o of afs)if(verOf(o)<want)await gd(`/files/${o.id}`,{method:"DELETE"}).catch(()=>{});}
+        }
+        else if(parts.length&&af&&have===want)safeDrop(m.id); // 雲端已有錄音：本機保險檔不再需要
+        else if(af&&(!parts.length||have!==want)){setSyncStatus(`下載錄音中：${m.title||"未命名會議"}…`);const b=await (await gd(`/files/${af.id}?alt=media`)).blob();
+          const t=/\.(m4a|mp4)$/.test(af.name)?"audio/mp4":/\.ogg$/.test(af.name)?"audio/ogg":(m.mime||b.type||"audio/webm").split(";")[0];
+          await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:t})});m.audioHave=want;await dbPut("meetings",m);adown++;if(cur&&cur.id===m.id){audioFor=null;loadPlayer()}}
       }
     }
     const settings={};SYNC_CFG.forEach(k=>{settings[k]=cfg[k]});
@@ -2082,7 +2263,7 @@ $("r-go").onclick=async()=>{
       const m=JSON.parse(await mf.async("string"));m.status="done";
       await dbDel("audio",midRange(m.id));await dbDel("chunks",midRange(m.id));
       m.hasAudio=false;
-      if(it.audio){const af=rZip.file(`meetings/${it.folder}/${it.audio}`);if(af){const b=await af.async("blob");const t=it.audio.endsWith("m4a")?"audio/mp4":it.audio.endsWith("ogg")?"audio/ogg":"audio/webm";await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:t})});m.hasAudio=true;m.mime=t}}
+      if(it.audio){const af=rZip.file(`meetings/${it.folder}/${it.audio}`);if(af){const b=await af.async("blob");const t=it.audio.endsWith("m4a")?"audio/mp4":it.audio.endsWith("ogg")?"audio/ogg":"audio/webm";await dbPut("audio",{mid:m.id,i:0,blob:new Blob([b],{type:t})});m.hasAudio=true;m.mime=t;m.audioHave=m.audioAt||0}}
       if(it.pending){const pj=rZip.file(`meetings/${it.folder}/待轉錄/index.json`);if(pj){for(const c of JSON.parse(await pj.async("string"))){const cf=rZip.file(`meetings/${it.folder}/${c.file}`);if(cf){const b=await cf.async("blob");await dbPut("chunks",{mid:m.id,start:c.start,dur:c.dur,blob:new Blob([b],{type:c.type||"audio/webm"}),tries:0})}}}}
       await dbPut("meetings",m);
       const i=meetings.findIndex(x=>x.id===m.id);if(i>=0){meetings[i]=m;replaced++}else{meetings.push(m);added++}
@@ -2116,16 +2297,18 @@ async function migrateV1(){
   await dbPut("meetings",m);lsSet("mtg-v1-migrated",true);
 }
 (async()=>{
-  try{db=await openDB()}catch(e){status("無法開啟本機資料庫："+(e.message||e));return}
+  try{await openStorage()}catch(e){status("無法開啟本機資料庫："+(e.message||e));return}
   try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
   await migrateV1();
   meetings=await dbGetAll("meetings");meetings.forEach(m=>mSnap.set(m.id,snapOf(m)));
   // App 被關閉時正在錄音的會議：保留已存下的錄音
   // 資料庫被清掉（例如 WebView 退回舊版）時，從 WebView 以外的保險檔救回錄音
   const rescued=await safeRecover();
-  for(const m of meetings){if(m.status==="recording"){m.status="done";const parts=await dbGetAll("audio",midRange(m.id));if(!m.duration&&m.segs&&m.segs.length)m.duration=m.segs[m.segs.length-1].e||0;m.hasAudio=parts.length>0;await saveM(m)}}
+  const live=await recAttach();
+  for(const m of meetings){if(m.status==="recording"&&!(live&&live.mid===m.id)){m.status="done";const parts=await audioParts(m.id);if(!m.duration&&m.segs&&m.segs.length)m.duration=m.segs[m.segs.length-1].e||0;m.hasAudio=parts.length>0;await saveM(m)}}
   const last=[...meetings].sort((a,b)=>b.updatedAt-a.updatedAt)[0];
   cur=last||null;
+  if(live)recResumeUI(live);
   renderAll();updateStorage();pump();if(cfg.syncOn)syncSoon(4000);
   if(rescued)toast(`已從手機檔案救回 ${rescued} 場會議的錄音`);
   if(!sttReady()&&!meetings.length){status("第一次使用：請先到左上 ☰ → 設定，依說明申請並填入 Gemini 金鑰")}
