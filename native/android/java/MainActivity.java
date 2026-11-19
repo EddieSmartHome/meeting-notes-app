@@ -25,6 +25,7 @@ public class MainActivity extends BridgeActivity {
     private static long goneAt1 = 0, goneAt2 = 0;
     private static boolean renderGoneRestart = false;
     private static boolean suffixSet = false;
+    private static boolean crashHandlerSet = false;
     // 啟動是否成功：開啟時 +1，順利運作 20 秒後歸零。數字沒歸零代表上次啟動途中就當掉
     private static final String BOOT_PREFS = "boot", BOOT_FAILS = "fails";
     private final Handler bootHandler = new Handler(Looper.getMainLooper());
@@ -32,6 +33,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        installCrashHandler();
         SharedPreferences boot = getSharedPreferences(BOOT_PREFS, MODE_PRIVATE);
         int fails = boot.getInt(BOOT_FAILS, 0);
         // 旋轉螢幕等設定變更也會重建畫面，不算啟動；畫面元件當掉後的重建要算
@@ -209,6 +211,8 @@ public class MainActivity extends BridgeActivity {
                     } catch (Exception ignored) {}
                 }
             }
+            File jc = new File(StorePlugin.root(this), "java-crash.txt");
+            if (jc.isFile()) sb.append("\n── 當機當下的錯誤細節（最新的在最上面）──\n").append(StorePlugin.readText(jc));
             String text = sb.toString();
             StorePlugin.writeAtomic(new File(StorePlugin.root(this), "crash-log.txt"), text);
             android.content.ContentValues cv = new android.content.ContentValues();
@@ -221,6 +225,31 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception e) {
             Log.e(TAG, "exit reasons", e);
         }
+    }
+
+    /**
+     * App 因 Java 錯誤當掉時（系統紀錄的原因代碼 4），Android 不會留下錯誤細節。
+     * 在當掉的瞬間把錯誤內容寫進 files/store/java-crash.txt（保留最近幾次），下次開啟時併入當機紀錄，再交回系統照常處理。
+     */
+    private void installCrashHandler() {
+        if (crashHandlerSet) return;
+        crashHandlerSet = true;
+        final File out = new File(StorePlugin.root(this), "java-crash.txt");
+        final String wv = webViewVersion();
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try {
+                java.io.StringWriter sw = new java.io.StringWriter();
+                e.printStackTrace(new java.io.PrintWriter(sw));
+                String trace = sw.toString();
+                if (trace.length() > 12000) trace = trace.substring(0, 12000) + "\n…（以下省略）\n";
+                String old = out.isFile() ? StorePlugin.readText(out) : "";
+                if (old.length() > 24000) old = old.substring(0, 24000);
+                StorePlugin.writeAtomic(out, new java.util.Date() + "  執行緒 " + t.getName() + "  WebView " + wv + "\n" + trace + "\n" + old);
+            } catch (Throwable ignored) {
+            }
+            if (prev != null) prev.uncaughtException(t, e);
+        });
     }
 
     private static void deleteTree(File f) throws java.io.IOException {
