@@ -35,6 +35,7 @@ public class MainActivity extends BridgeActivity {
         int fails = boot.getInt(BOOT_FAILS, 0);
         // 旋轉螢幕等設定變更也會重建畫面，不算啟動；畫面元件當掉後的重建要算
         boolean configChange = savedInstanceState != null && !renderGoneRestart;
+        // 註：被回收記憶體後的重建 savedInstanceState 也不是 null，會走 configChange、不計次
         renderGoneRestart = false;
         if (configChange) fails = 0;
         else boot.edit().putInt(BOOT_FAILS, fails + 1).commit();
@@ -58,6 +59,10 @@ public class MainActivity extends BridgeActivity {
             // 連續啟動失敗：改用軟體繪圖，避開顯示晶片驅動與 WebView 版本不合造成的當機
             Log.w(TAG, "safe mode: software rendering, fails=" + fails + ", webview=" + wvVer);
             bridge.getWebView().setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && bridge != null && bridge.getWebView() != null) {
+            // 切到其他 App 時，畫面程序維持和 App 一樣的重要性（錄音中有前景服務），不被系統優先回收
+            bridge.getWebView().setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
         }
         if (fails >= 1) Toast.makeText(this, "上次開啟失敗，已清除畫面暫存並以安全模式開啟（會議資料不受影響）", Toast.LENGTH_LONG).show();
         if (bridge != null) bridge.addWebViewListener(new WebViewListener() {
@@ -149,7 +154,8 @@ public class MainActivity extends BridgeActivity {
             finish();
         } else {
             Toast.makeText(this, "畫面元件發生錯誤，正在重新載入（資料不受影響）", Toast.LENGTH_SHORT).show();
-            renderGoneRestart = true;
+            // 真的當掉才算一次啟動失敗；在背景被系統回收記憶體不算，免得誤進安全模式
+            renderGoneRestart = crashed;
             recreate();
         }
         return true; // 已處理，不讓系統關掉整個 App
