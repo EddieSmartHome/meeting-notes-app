@@ -20,7 +20,7 @@ import androidx.core.app.ServiceCompat;
  *
  * Android 會讓進入背景的 App 只收到靜音；錄音時啟動這個服務，
  * 系統就把 App 視為「前景使用麥克風」，螢幕關閉或切到其他 App 時仍能收音。
- * 通知列會常駐「錄音中」，點通知回到 App。實際錄音仍由網頁層的 MediaRecorder 負責。
+ * 通知列會常駐「錄音中」，點通知回到 App。v2.6.0 起由 NativeRecorder 在這個服務裡直接錄音；舊的網頁錄音模式仍可只開服務。
  */
 public class RecordingService extends Service {
     static final String CHANNEL_ID = "recording";
@@ -81,6 +81,8 @@ public class RecordingService extends Service {
 
     @Override
     public void onDestroy() {
+        final NativeRecorder r = NativeRecorder.current;
+        if (r != null) new Thread(r::stop, "stop-recording").start(); // 服務被結束時錄音也要收尾，不能讓麥克風一直開著
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         wakeLock = null;
         super.onDestroy();
@@ -88,8 +90,10 @@ public class RecordingService extends Service {
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
-        // 使用者從最近使用的 App 中滑掉 App：網頁已經不在，服務也一起結束
-        stopSelf();
+        // 使用者從最近使用的 App 中滑掉 App：當成按下「結束」，把錄音好好收尾存檔
+        final NativeRecorder r = NativeRecorder.current;
+        if (r != null) new Thread(r::stop, "stop-recording").start();
+        else stopSelf();
         super.onTaskRemoved(rootIntent);
     }
 
