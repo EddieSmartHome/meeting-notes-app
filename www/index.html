@@ -146,6 +146,8 @@ audio{width:100%;height:40px}
   padding-block:calc(env(safe-area-inset-top,0px) + 16px) calc(env(safe-area-inset-bottom,0px) + 16px);
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 .modal .panel{width:min(560px,100%);max-height:100%;overflow-y:auto}
+.chk{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.95rem}
+.chk input{width:auto;margin:0}
 .upd-notes{background:var(--bg);border-radius:8px;padding:8px 12px;font-size:.88rem;max-height:40vh;overflow-y:auto}
 .upd-notes h2{font-size:.95rem;border:0;margin:.6em 0 .2em}
 .help{background:var(--accent-soft);border-radius:8px;padding:12px 14px;gap:6px}
@@ -297,6 +299,7 @@ audio{width:100%;height:40px}
             <span class="spacer"></span>
             <button class="btn-ghost" id="btn-copy" hidden>複製</button>
             <button class="btn-ghost" id="btn-share" hidden>分享</button>
+            <button class="btn-ghost" id="btn-pdf" hidden>匯出 PDF</button>
           </div>
           <div class="err" id="gen-err" hidden></div>
           <div class="minutes" id="minutes"></div>
@@ -482,6 +485,20 @@ audio{width:100%;height:40px}
       </div>
     </div>
   </div>
+</div>
+<div class="modal" id="pdf" hidden role="dialog" aria-modal="true" aria-labelledby="pdf-title">
+  <section class="panel">
+    <h2 id="pdf-title">匯出 PDF</h2>
+    <p class="note">要放進 PDF 的內容：</p>
+    <label class="chk"><input type="checkbox" id="pdf-min"> 會議記錄</label>
+    <label class="chk"><input type="checkbox" id="pdf-tr"> 逐字稿（含時間）</label>
+    <p class="note" id="pdf-hint">按「匯出」後會開啟手機的列印畫面：上方印表機選「儲存為 PDF」，再按下載圖示存檔。也可以直接選印表機列印。</p>
+    <div class="headrow">
+      <button class="btn-primary" id="pdf-go">匯出</button>
+      <span class="spacer"></span>
+      <button id="pdf-close">取消</button>
+    </div>
+  </section>
 </div>
 <div class="modal" id="upd" hidden role="dialog" aria-modal="true" aria-labelledby="upd-title">
   <section class="panel">
@@ -1488,6 +1505,7 @@ function renderMinutes(){
   const m=curM();$("min-mark").textContent=m.minutes?"✓":"";
   if(minEditId&&minEditId!==m.id)closeMinEdit();
   const editing=!!minEditId;$("min-editor").hidden=!editing;$("minutes").hidden=editing;
+  $("btn-pdf").hidden=editing||!cur||!(m.minutes||(m.segs&&m.segs.length));
   if(!genBusy&&!genArm)$("btn-gen").textContent=m.minutes?"重新產生":"產生會議記錄";
   $("btn-edit-min").hidden=editing||genBusy||!cur;$("btn-edit-min").textContent=m.minutes?"編輯":"手動輸入";
   $("btn-undo-min").hidden=editing||genBusy||!m.minPrev;
@@ -1526,6 +1544,52 @@ $("btn-share").onclick=async()=>{const m=curM();
   if(navigator.share){try{await navigator.share({title:m.title||"會議記錄",text:m.minutes})}catch(e){}return}
   copyText(m.minutes,"已複製會議記錄");
 };
+// ================= 匯出 PDF（v2.6.3） =================
+// 手機：原生外掛 PdfExport 把排好的 HTML 交給 Android 列印功能（選「儲存為 PDF」）；電腦瀏覽器：用 window.print()
+function pdfHtml(m,withMin,withTr){
+  const c=catOf(m),title=m.title||"未命名會議";
+  const info=[["日期時間",m.date?dateLabel(m.date):""],["地點／形式",m.place||""],["與會者",m.people||""],["分類",c?c.name:""],["錄音長度",m.duration?fmt(m.duration):""]].filter(x=>x[1]);
+  const infoHtml=info.length?`<table class="info">${info.map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("")}</table>`:"";
+  const minHasHead=withMin&&m.minutes&&/^\s*#\s/.test(m.minutes);
+  let body=minHasHead?"":`<h1>${esc(title)}</h1>${infoHtml}`;
+  if(withMin&&m.minutes)body+=`<section class="min">${md(m.minutes)}</section>`;
+  if(withTr&&m.segs&&m.segs.length){
+    body+=`<section class="tr${withMin&&m.minutes?" brk":""}"><h2>逐字稿</h2>`+
+      (minHasHead?`<p class="sub">${esc(title)}${m.date?"・"+esc(dateLabel(m.date)):""}</p>`:"")+
+      `<table class="segs">${m.segs.map(x=>`<tr><td class="t">${fmt(x.s)}${x.key?" ★":""}</td><td>${esc(x.text||"")}</td></tr>`).join("")}</table></section>`}
+  const css=`@page{size:A4;margin:16mm 14mm}
+*{box-sizing:border-box}
+body{font-family:"Noto Sans TC","Noto Sans CJK TC","Microsoft JhengHei","PingFang TC",sans-serif;color:#1d1d1f;font-size:11pt;line-height:1.6;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+h1{font-size:17pt;margin:0 0 8pt}
+h2{font-size:13pt;margin:14pt 0 6pt;padding-bottom:3pt;border-bottom:1px solid #c9c9cf;break-after:avoid}
+h3{font-size:11.5pt;margin:10pt 0 4pt;break-after:avoid}
+p{margin:4pt 0}ul,ol{margin:3pt 0;padding-left:18pt}li{margin:1pt 0}
+code{font-family:monospace;background:#f1f1f4;padding:0 3pt;border-radius:3pt}
+table{border-collapse:collapse;width:100%;margin:6pt 0}
+th,td{border:1px solid #c9c9cf;padding:4pt 6pt;text-align:left;vertical-align:top}
+thead th{background:#f1f1f4}
+tr{break-inside:avoid}
+table.info th{width:24%;background:#f6f6f8;font-weight:600}
+.sub{color:#6e6e73;font-size:9.5pt}
+table.segs td{border:0;border-bottom:1px solid #ececf0;padding:3pt 4pt}
+table.segs td.t{width:16mm;color:#6e6e73;font-family:monospace;font-size:9pt;white-space:nowrap}
+.brk{break-before:page}
+.foot{margin-top:16pt;color:#8e8e93;font-size:8.5pt}`;
+  return`<!doctype html><html lang="zh-Hant-TW"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${css}</style></head><body>${body}<p class="foot">由會議速記 App 匯出・${esc(dateLabel(new Date().toISOString()))}</p></body></html>`;
+}
+$("btn-pdf").onclick=()=>{const m=curM();if(!m)return;const hasMin=!!m.minutes,hasTr=!!(m.segs&&m.segs.length);
+  $("pdf-min").checked=hasMin;$("pdf-min").disabled=!hasMin;$("pdf-tr").checked=!hasMin&&hasTr;$("pdf-tr").disabled=!hasTr;
+  $("pdf-hint").hidden=!(NATIVE&&PL.PdfExport);$("pdf").hidden=false};
+$("pdf-close").onclick=()=>{$("pdf").hidden=true};
+$("pdf-go").onclick=async()=>{const m=curM(),wm=$("pdf-min").checked,wt=$("pdf-tr").checked;
+  if(!wm&&!wt){toast("請至少勾選一項");return}
+  const html=pdfHtml(m,wm,wt),name=safeName(`${(m.date||"").slice(0,10)}_${m.title||"未命名會議"}`);
+  $("pdf").hidden=true;
+  if(NATIVE&&PL.PdfExport){try{await PL.PdfExport.print({html,name})}catch(e){toast("匯出失敗："+(e.message||e))}return}
+  const f=document.createElement("iframe");f.style.cssText="position:fixed;right:0;bottom:0;width:0;height:0;border:0";document.body.appendChild(f);
+  const d=f.contentDocument;d.open();d.write(html);d.close();
+  setTimeout(()=>{try{f.contentWindow.focus();f.contentWindow.print()}catch(e){toast("匯出失敗："+(e.message||e))}setTimeout(()=>f.remove(),60000)},300)};
+
 
 // ================= 設定 =================
 function showView(v){view=v;$("view-meeting").hidden=v!=="meeting";$("view-settings").hidden=v!=="settings";$("view-backup").hidden=v!=="backup";
