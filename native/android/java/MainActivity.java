@@ -70,6 +70,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(LocalAsrPlugin.class);
         registerPlugin(DriveAuthPlugin.class);
         registerPlugin(StorePlugin.class);
+        registerPlugin(PdfExportPlugin.class);
         super.onCreate(savedInstanceState);
         bootHandler.postDelayed(bootOk, 20_000);
         if (soft && bridge != null && bridge.getWebView() != null) {
