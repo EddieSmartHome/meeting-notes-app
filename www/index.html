@@ -192,6 +192,13 @@ audio{width:100%;height:40px}
 .minutes table{border-collapse:collapse;width:100%;font-size:.9rem;margin:.5em 0}
 .minutes th,.minutes td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
 .minutes th{background:var(--bg)}
+.minutes .tbc{all:unset;cursor:pointer;color:var(--warn);background:var(--rec-soft);border-radius:4px;padding:0 3px;text-decoration:underline dotted;text-underline-offset:3px}
+.minutes .tbc::after{content:" ✎";font-size:.85em}
+.fix-src{font-size:.88rem;color:var(--muted);background:var(--bg);border-radius:6px;padding:8px 10px;margin:6px 0 10px;overflow-wrap:anywhere}
+.fix-sug{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px}
+.fix-sug button{padding:3px 10px;font-size:.85rem}
+#fix label{display:block;font-size:.85rem;color:var(--muted);margin-top:8px}
+#fix-count{margin:8px 0}
 #min-edit{min-height:55vh;font-family:var(--font-mono);font-size:.85rem;line-height:1.5}
 .confirm-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:8px 16px;border-radius:8px;font-size:.88rem;z-index:60;max-width:90vw}
@@ -497,6 +504,25 @@ audio{width:100%;height:40px}
       <button class="btn-primary" id="pdf-go">匯出</button>
       <span class="spacer"></span>
       <button id="pdf-close">取消</button>
+    </div>
+  </section>
+</div>
+<div class="modal" id="fix" hidden role="dialog" aria-modal="true" aria-labelledby="fix-title">
+  <section class="panel">
+    <h2 id="fix-title">修正待確認</h2>
+    <div class="fix-src" id="fix-note"></div>
+    <label for="fix-from">原文（要找的字，可縮短成真正錯的那幾個字）</label>
+    <input id="fix-from" autocomplete="off">
+    <label for="fix-to">改成</label>
+    <input id="fix-to" autocomplete="off">
+    <div class="fix-sug" id="fix-sug"></div>
+    <label class="chk"><input type="checkbox" id="fix-tr" checked> 逐字稿一起修正</label>
+    <p class="note" id="fix-count"></p>
+    <div class="headrow">
+      <button class="btn-primary" id="fix-go">套用修正</button>
+      <button id="fix-drop">只移除標註</button>
+      <span class="spacer"></span>
+      <button id="fix-close">取消</button>
     </div>
   </section>
 </div>
@@ -1511,6 +1537,7 @@ function renderMinutes(){
   $("btn-undo-min").hidden=editing||genBusy||!m.minPrev;
   if(!m.minutes){$("minutes").innerHTML='<p class="note">錄音與轉錄完成後按「產生會議記錄」，或按「手動輸入」自己寫。也可按「複製提示詞」貼到 Claude App 整理。</p>';$("btn-copy").hidden=$("btn-share").hidden=true;return}
   $("minutes").innerHTML=md(m.minutes)+(m.minEdited?'<p class="note">（已手動修改）</p>':"");$("btn-copy").hidden=editing;$("btn-share").hidden=editing;
+  if(cur)markTbc($("minutes"),m);
 }
 function closeMinEdit(){minEditId=null;$("min-editor").hidden=true;$("minutes").hidden=false}
 $("btn-edit-min").onclick=()=>{const m=cur;if(!m||genBusy)return;disarmGen();minEditId=m.id;$("min-edit").value=m.minutes||"";renderMinutes();$("min-edit").focus()};
@@ -1519,8 +1546,95 @@ $("min-save").onclick=async()=>{const m=curM(),v=$("min-edit").value.replace(/\s
   if(minEditId===m.id&&v!==(m.minutes||"")){setMinutes(m,v,true);if(cur)await saveM(m);toast(v?"已儲存會議記錄":"已清除會議記錄（可按「復原」）")}
   closeMinEdit();renderMinutes()};
 $("btn-undo-min").onclick=async()=>{const m=curM();if(!m.minPrev)return;
+  const trBack=undoFixSegs(m);
   const t=m.minutes,e=!!m.minEdited;m.minutes=m.minPrev;m.minEdited=!!m.minPrevEdited;m.minPrev=t||"";m.minPrevEdited=e;
-  if(cur)await saveM(m);renderMinutes();toast("已切回上一版（再按一次可切回）")};
+  if(cur)await saveM(m);renderMinutes();if(trBack)renderTranscript();toast(trBack?"已復原修正（逐字稿也已改回）":"已切回上一版（再按一次可切回）")};
+// ===== 點「待確認」修正同音錯字：會議記錄與逐字稿一起改 =====
+// 找出「（待確認：…）」標註，括號可有一層內嵌
+function tbcNotes(text){
+  const out=[],re=/[（(]\s*待確認\s*[：:]/g;let mm;
+  while((mm=re.exec(text))){let d=0,j=mm.index;
+    for(;j<text.length;j++){const c=text[j];if(c==="（"||c==="(")d++;else if(c==="）"||c===")"){d--;if(!d)break}else if(c==="\n")break}
+    if(d){continue}
+    const raw=text.slice(mm.index,j+1),body=raw.slice(mm[0].length,-1);
+    const q=[...body.matchAll(/「([^」]+)」/g)].map(x=>x[1]);
+    const om=body.match(/原文\s*[：:]?\s*「([^」]+)」/);const orig=om?om[1]:(q[0]||"");
+    out.push({start:mm.index,end:j+1,raw,body,orig,sugg:q.filter(x=>x!==orig)});re.lastIndex=j+1}
+  return out;
+}
+// 在畫面上把標註包成可點的按鈕（依出現順序對應原始文字中的第 k 個）
+function markTbc(box,m){
+  const notes=tbcNotes(m.minutes||"");if(!notes.length)return;let k=0;
+  const w=document.createTreeWalker(box,NodeFilter.SHOW_TEXT),nodes=[];while(w.nextNode())nodes.push(w.currentNode);
+  for(const n of nodes){const t=n.nodeValue,ns=tbcNotes(t);if(!ns.length)continue;
+    const f=document.createDocumentFragment();let p=0;
+    for(const x of ns){if(k>=notes.length)break;f.append(t.slice(p,x.start));
+      const b=document.createElement("button");b.className="tbc";b.textContent=x.raw;b.dataset.k=k++;b.title="點一下修正";f.append(b);p=x.end}
+    f.append(t.slice(p));n.replaceWith(f)}
+  if(k){const h=document.createElement("p");h.className="note";h.textContent="點標示的「待確認」可以直接修正錯字，逐字稿會一起改。";box.append(h)}
+}
+$("minutes").addEventListener("click",e=>{const b=e.target.closest(".tbc");if(b)openFix(+b.dataset.k)});
+// 忽略空白與標點比對逐字稿；回傳 [{seg,a,b}]（a、b 為原文字位置）
+const FIX_SKIP=/[\s，。、！？,.!?；;：:「」『』（）()…～~"'“”‘’]/;
+function normMap(t){let n="",map=[];for(let i=0;i<t.length;i++){if(FIX_SKIP.test(t[i]))continue;n+=t[i];map.push(i)}return{n,map}}
+function findInSegs(m,from){
+  const q=normMap(from).n,hits=[];if(!q)return hits;
+  for(const s of m.segs||[]){const {n,map}=normMap(s.text||"");let i=n.indexOf(q);
+    while(i>=0){hits.push({seg:s,a:map[i],b:map[i+q.length-1]+1});i=n.indexOf(q,i+q.length)}}
+  return hits;
+}
+function countIn(text,from){if(!from)return 0;let c=0,i=text.indexOf(from);while(i>=0){c++;i=text.indexOf(from,i+from.length)}return c}
+let fixK=-1,lastFix=null;
+function minWithout(m,note){
+  // 標註在「待確認事項」段落的條列裡：整條移除；段落空了寫「無」。其他地方只拿掉標註
+  const txt=m.minutes,L=txt.split("\n");let pos=0,li=-1;
+  for(let i=0;i<L.length;i++){if(note.start>=pos&&note.start<=pos+L[i].length){li=i;break}pos+=L[i].length+1}
+  let inSec=false;for(let i=li;i>=0;i--){const h=L[i].match(/^#{1,3}\s+(.*)$/);if(h){inSec=/待確認/.test(h[1]);break}}
+  if(li>=0&&inSec&&/^\s*([-*]|\d+\.)\s+/.test(L[li])){L.splice(li,1);
+    let h=li-1;while(h>=0&&!/^#{1,3}\s/.test(L[h]))h--;let e=li;while(e<L.length&&!/^#{1,3}\s/.test(L[e]))e++;
+    if(!L.slice(h+1,e).some(l=>l.trim()))L.splice(h+1,0,"無");
+    return L.join("\n")}
+  let l=txt.slice(0,note.start).replace(/[ \t]+$/,"");const r=txt.slice(note.end);
+  if(/[，、]$/.test(l)&&/^(\s*[。；\n]|$)/.test(r))l=l.slice(0,-1);
+  return l+r;
+}
+function updFixCount(){
+  const m=curM(),from=$("fix-from").value.trim(),note=tbcNotes(m.minutes||"")[fixK];if(!note)return;
+  const rest=m.minutes.slice(0,note.start)+m.minutes.slice(note.end);
+  const nm=countIn(rest,from),nt=findInSegs(m,from).length;
+  $("fix-count").textContent=!from?"填入原文才能修正；或按「只移除標註」。":
+    `會議記錄找到 ${nm} 處，逐字稿找到 ${nt} 處。`+(nt?"":"（逐字稿找不到時，可把原文縮短成真正錯的幾個字再試）");
+  $("fix-go").disabled=!from||!$("fix-to").value.trim()||(!nm&&!(nt&&$("fix-tr").checked));
+}
+function openFix(k){
+  const m=curM(),note=tbcNotes(m.minutes||"")[k];if(!note)return;fixK=k;
+  $("fix-note").textContent=note.raw;$("fix-from").value=note.orig;$("fix-to").value="";
+  const sg=$("fix-sug");sg.textContent="";
+  note.sugg.flatMap(x=>{const p=x.split(/[／/]/).map(y=>y.trim()).filter(Boolean);return p.length>1?[x,...p]:[x]}).filter((x,i,a)=>a.indexOf(x)===i).forEach(x=>{
+    const b=document.createElement("button");b.className="btn-ghost";b.textContent=x;b.onclick=()=>{$("fix-to").value=x;updFixCount()};sg.append(b)});
+  sg.hidden=!sg.children.length;$("fix").hidden=false;updFixCount();setTimeout(()=>$("fix-to").focus(),50);
+}
+["fix-from","fix-to"].forEach(id=>$(id).addEventListener("input",updFixCount));$("fix-tr").onchange=updFixCount;
+$("fix-close").onclick=()=>{$("fix").hidden=true};
+async function applyFix(drop){
+  const m=cur;if(!m)return;const note=tbcNotes(m.minutes||"")[fixK];if(!note){$("fix").hidden=true;return}
+  const from=$("fix-from").value.trim(),to=$("fix-to").value.trim();
+  // 同一個錯字常在「討論重點」和「待確認事項」各標一次：原文相同的標註一起移除
+  let t=m.minutes,segs=[],n=0;const same=x=>x.raw===note.raw||(!drop&&from&&to&&x.orig&&(x.orig.includes(from)||from.includes(x.orig)));
+  for(let ns=tbcNotes(t).filter(same);ns.length;ns=tbcNotes(t).filter(same)){const x=ns[ns.length-1];t=minWithout({minutes:t},x)}
+  if(!drop&&from&&to){n=countIn(t,from);t=t.split(from).join(to);
+    if($("fix-tr").checked){const hits=findInSegs(m,from);const by=new Map();hits.forEach(h=>{if(!by.has(h.seg))by.set(h.seg,[]);by.get(h.seg).push(h)});
+      by.forEach((hs,s)=>{const old=s.text;let x=old;hs.sort((a,b)=>b.a-a.a).forEach(h=>{x=x.slice(0,h.a)+to+x.slice(h.b)});s.text=x;segs.push([s,old])})}}
+  setMinutes(m,t,true);lastFix=segs.length?{mid:m.id,minutes:t,segs}:null;
+  await saveM(m);$("fix").hidden=true;renderMinutes();if(segs.length)renderTranscript();
+  toast(drop?"已移除標註（可按「復原」）":`已修正：會議記錄 ${n} 處、逐字稿 ${segs.length} 段（可按「復原」）`);
+}
+$("fix-go").onclick=()=>applyFix(false);$("fix-drop").onclick=()=>applyFix(true);
+// 復原會議記錄時，若是剛才的修正，逐字稿一起改回
+function undoFixSegs(m){
+  const f=lastFix;lastFix=null;if(!f||f.mid!==m.id||m.minutes!==f.minutes)return false;
+  f.segs.forEach(([s,old])=>{if(m.segs.includes(s))s.text=old});return true;
+}
 function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 function inl(s){return esc(s).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/(^|[^*])\*([^*\s][^*]*)\*/g,"$1<em>$2</em>")}
 function md(src){
