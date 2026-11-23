@@ -15,7 +15,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 /**
- * 會議記錄匯出 PDF（v2.7.0）：把網頁端排好的 HTML 放進一個看不見的 WebView，交給 Android 的列印功能。
+ * 會議記錄匯出 PDF（v2.6.3）：把網頁端排好的 HTML 放進一個看不見的 WebView，交給 Android 的列印功能。
  * 使用者在系統列印畫面選「儲存為 PDF」即可存檔，也可以直接送到印表機。
  * 文字由系統字型繪製，繁體中文正常顯示、PDF 內的文字可搜尋與複製；分頁由 WebView 的列印排版處理。
  */

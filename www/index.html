@@ -1544,7 +1544,7 @@ $("btn-share").onclick=async()=>{const m=curM();
   if(navigator.share){try{await navigator.share({title:m.title||"會議記錄",text:m.minutes})}catch(e){}return}
   copyText(m.minutes,"已複製會議記錄");
 };
-// ================= 匯出 PDF（v2.7.0） =================
+// ================= 匯出 PDF（v2.6.3） =================
 // 手機：原生外掛 PdfExport 把排好的 HTML 交給 Android 列印功能（選「儲存為 PDF」）；電腦瀏覽器：用 window.print()
 function pdfHtml(m,withMin,withTr){
   const c=catOf(m),title=m.title||"未命名會議";
