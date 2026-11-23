@@ -77,6 +77,7 @@
 - **Groq 轉錄**：`/audio/transcriptions`，`verbose_json`，依 `no_speech_prob` 過濾
 - **後處理**：OpenCC 簡轉台灣繁體、過濾常見幻覺字句、合併過短片段
 - **播放**：把錄音分塊組回 Blob，用 fix-webm-duration 補上長度，讓播放器可拖曳；`timeupdate` 時標亮對應段落
+- **待確認修正（v2.6.4）**：`renderMinutes` 後 `markTbc()` 走訪文字節點，把「（待確認：…）」（`tbcNotes()` 解析，允許一層內嵌括號；原文取「原文「…」」，否則第一個「…」，其餘「…」當建議，含「／」的再拆開）包成 `.tbc` 按鈕，依出現順序對應 `m.minutes` 中的第 k 個標註。修正框 `#fix`：會議記錄用字串全部取代；逐字稿用 `findInSegs()` 忽略空白與標點比對單一段落內的文字（不跨段）。原文相同的標註一起移除（`minWithout`：在標題含「待確認」的段落裡整條條列刪除，空了補「無」）。以 `setMinutes(…,true)` 存，`lastFix` 記住改過的段落，按「復原」且會議記錄仍是這次修正的內容時逐字稿一起改回（只在記憶體中，重開 App 後復原只還原會議記錄）
 - **會議記錄**：同一份提示詞（`buildPrompt`）給 Gemini、Claude 或「複製提示詞」使用
 - **設定**：存在 `localStorage` 的 `mtg-cfg-v2`
 - **備份與還原（v1.0.8）**：JSZip 打包成 .zip，結構為 `backup.json`（格式版本、會議索引、設定）＋ `meetings/<日期_名稱>/`（`meeting.json`、`逐字稿.txt`、`會議記錄.md`、`錄音.webm`、`待轉錄/`）。存到手機用 Filesystem 寫入 `Documents/會議速記/`，大檔分段以 base64 append 寫入；分享先寫到 Cache 再用 Share 外掛分享。還原以會議 id 比對，可略過或覆蓋
